@@ -1,0 +1,45 @@
+name: zedge_studio
+description: Zedge Studio - native Flutter control room for the Zedge upload automation (Windows + Android).
+publish_to: none
+version: 2.0.0+2
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^1.2.2
+  provider: ^6.1.2
+  intl: ^0.19.0
+  shared_preferences: ^2.3.2
+  path_provider: ^2.1.4
+  file_picker: ^8.1.2
+  cached_network_image: ^3.4.1
+  url_launcher: ^6.3.0
+  window_manager: ^0.4.2
+  google_fonts: ^6.2.1
+  cupertino_icons: ^1.0.8
+  image: ^4.2.0
+  audioplayers: ^6.0.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+  flutter_launcher_icons: ^0.13.1
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/icon/
+
+flutter_launcher_icons:
+  android: launcher_icon
+  image_path: assets/icon/icon.png
+  adaptive_icon_background: "#211D12"
+  adaptive_icon_foreground: assets/icon/icon_fg.png
+  windows:
+    generate: true
+    image_path: assets/icon/icon.png
+    icon_size: 256
