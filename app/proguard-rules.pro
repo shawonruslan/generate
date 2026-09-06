@@ -1,5 +1,0 @@
--keep class com.github.junrar.** { *; }
--dontwarn com.github.junrar.**
--dontwarn okhttp3.**
--dontwarn okio.**
--keepattributes *Annotation*
