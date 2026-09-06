@@ -10,6 +10,9 @@ import androidx.activity.viewModels
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -27,12 +30,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CalendarMonth
-import androidx.compose.material.icons.filled.CloudUpload
-import androidx.compose.material.icons.filled.Code
-import androidx.compose.material.icons.filled.Dashboard
-import androidx.compose.material.icons.filled.Hub
-import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -40,9 +38,6 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -69,6 +64,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.zedge.contentstudio.core.Accounts
 import com.zedge.contentstudio.ui.GitHubViewModel
 import com.zedge.contentstudio.ui.MainViewModel
+import com.zedge.contentstudio.ui.components.FloatingNavBar
 import com.zedge.contentstudio.ui.components.ProgressCard
 import com.zedge.contentstudio.ui.components.RequestDialog
 import com.zedge.contentstudio.ui.screens.DistributeScreen
@@ -156,39 +152,20 @@ fun AppRoot(vm: MainViewModel, ghVm: GitHubViewModel) {
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
             )
         },
-        bottomBar = {
-            NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
-                Page.entries.forEach { p ->
-                    NavigationBarItem(
-                        selected = page == p,
-                        onClick = { page = p },
-                        icon = {
-                            Icon(
-                                when (p) {
-                                    Page.HOME -> Icons.Default.Dashboard; Page.UPLOAD -> Icons.Default.CloudUpload; Page.SCHEDULE -> Icons.Default.CalendarMonth
-                                    Page.PINS -> Icons.Default.PushPin; Page.DISTRIBUTE -> Icons.Default.Hub; Page.GITHUB -> Icons.Default.Code
-                                },
-                                contentDescription = p.short,
-                                modifier = Modifier.size(22.dp)
-                            )
-                        },
-                        label = { Text(p.short, style = MaterialTheme.typography.labelSmall, maxLines = 1, softWrap = false) },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = BrandDark,
-                            selectedTextColor = MaterialTheme.colorScheme.primary,
-                            indicatorColor = BrandYellow,
-                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                        ),
-                    )
-                }
-            }
-        },
+        bottomBar = { FloatingNavBar(current = page, onSelect = { page = it }) },
         snackbarHost = { SnackbarHost(snack) },
         containerColor = MaterialTheme.colorScheme.background,
     ) { pad ->
         Box(Modifier.fillMaxSize().padding(pad)) {
-            AnimatedContent(targetState = page, transitionSpec = { fadeIn() togetherWith fadeOut() }, label = "page") { p ->
+            AnimatedContent(
+                targetState = page,
+                transitionSpec = {
+                    val forward = targetState.ordinal >= initialState.ordinal
+                    (slideInHorizontally(tween(260)) { if (forward) it / 5 else -it / 5 } + fadeIn(tween(260))) togetherWith
+                        (slideOutHorizontally(tween(200)) { if (forward) -it / 5 else it / 5 } + fadeOut(tween(200)))
+                },
+                label = "page",
+            ) { p ->
                 when (p) {
                     Page.HOME -> HomeScreen(vm, onOpenPage = { page = it })
                     Page.UPLOAD -> UploadScreen(vm)
@@ -221,7 +198,8 @@ fun AccountSwitcher(activeKey: String, connected: Boolean, onSelect: (String) ->
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             Accounts.all.forEach { a ->
                 DropdownMenuItem(
-                    text = { Text(a.label + if (a.key == activeKey) "  ✓" else "") },
+                    text = { Text(a.label, fontWeight = if (a.key == activeKey) FontWeight.Bold else FontWeight.Normal) },
+                    trailingIcon = { if (a.key == activeKey) Icon(Icons.Default.Check, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary) },
                     onClick = { open = false; onSelect(a.key) },
                 )
             }

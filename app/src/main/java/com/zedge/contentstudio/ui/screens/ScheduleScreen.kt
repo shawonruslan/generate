@@ -1,6 +1,5 @@
 package com.zedge.contentstudio.ui.screens
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -10,25 +9,35 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.filled.Today
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -39,14 +48,18 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -56,21 +69,33 @@ import com.zedge.contentstudio.core.ContentTypes
 import com.zedge.contentstudio.core.RealTime
 import com.zedge.contentstudio.data.QueueItem
 import com.zedge.contentstudio.domain.PlannedDay
-import com.zedge.contentstudio.domain.SchedulePlan
 import com.zedge.contentstudio.domain.SpecialDays
 import com.zedge.contentstudio.ui.MainViewModel
+import com.zedge.contentstudio.ui.components.Country
+import com.zedge.contentstudio.ui.components.EmptyState
+import com.zedge.contentstudio.ui.components.IconDot
 import com.zedge.contentstudio.ui.components.ItemThumb
-import com.zedge.contentstudio.ui.components.PagerBar
 import com.zedge.contentstudio.ui.components.StatTile
 import com.zedge.contentstudio.ui.components.TypeBadge
+import com.zedge.contentstudio.ui.components.TypePill
+import com.zedge.contentstudio.ui.components.holidayIcon
+import com.zedge.contentstudio.ui.components.typeIcon
 import com.zedge.contentstudio.ui.theme.BrandAmber
 import com.zedge.contentstudio.ui.theme.BrandDark
 import com.zedge.contentstudio.ui.theme.BrandYellow
 import com.zedge.contentstudio.ui.theme.Ok
 import com.zedge.contentstudio.ui.theme.Warn
 import com.zedge.contentstudio.ui.theme.typeColor
+import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.ZoneOffset
+
+// Planner card palette (light cards on the dark canvas, like the reference design)
+private val PlannerCard = Color(0xFFFFFDF6)
+private val PlannerCream = Color(0xFFFFF3C4)
+private val PlannerMuted = Color(0xFF8A7B55)
+private val PlannerOk = Color(0xFF1F8A4C)
+private val PlannerWarn = Color(0xFF9A6B00)
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -80,59 +105,102 @@ fun ScheduleScreen(vm: MainViewModel) {
     val synced by RealTime.synced.collectAsStateWithLifecycle()
     val sdStatus by vm.specialDays.status.collectAsStateWithLifecycle()
     val sdVersion by vm.specialDays.version.collectAsStateWithLifecycle()
-    var page by rememberSaveable { mutableStateOf(0) }
     var pinTarget by remember { mutableStateOf<PlannedDay?>(null) }   // empty slot tapped -> pick a queued file
     var moveItem by remember { mutableStateOf<Pair<QueueItem, PlannedDay>?>(null) } // long-press -> move / unpin
 
-    val totalPages = maxOf(1, (plan.days.size + SchedulePlan.DAYS_PER_PAGE - 1) / SchedulePlan.DAYS_PER_PAGE)
-    if (page >= totalPages) page = totalPages - 1
-    val visible = plan.days.drop(page * SchedulePlan.DAYS_PER_PAGE).take(SchedulePlan.DAYS_PER_PAGE)
+    val days = plan.days
+    val pageCount = rememberUpdatedState(days.size)
+    val pager = rememberPagerState(initialPage = 0) { pageCount.value }
+    val strip = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(pager.currentPage) { strip.animateScrollToItem(maxOf(0, pager.currentPage - 2)) }
 
-    LazyColumn(contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(top = 8.dp, bottom = 24.dp)) {
         // Today summary
-        item {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                StatTile("Left today", "${plan.rule.remaining}", Modifier.weight(1f), BrandAmber, hint = ContentTypes.dayUi(plan.rule.type).label)
-                StatTile("Uploaded today", "${plan.rule.uploadedToday} / ${ContentTypes.DAILY_LIMIT}", Modifier.weight(1f), Ok, hint = if (synced) "Live time ✓" else "Device clock")
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            StatTile("Left today", "${plan.rule.remaining}", Modifier.weight(1f), BrandAmber, hint = ContentTypes.dayUi(plan.rule.type).label)
+            StatTile("Uploaded today", "${plan.rule.uploadedToday} / ${ContentTypes.DAILY_LIMIT}", Modifier.weight(1f), Ok, hint = if (synced) "Live time" else "Device clock")
+        }
+        Spacer(Modifier.height(12.dp))
+
+        // Stock per type
+        FlowRow(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            ContentTypes.TYPE_CYCLE.forEach { t ->
+                val n = plan.buckets[t]?.size ?: 0
+                val c = typeColor(t)
+                Row(Modifier.clip(CircleShape).background(c.copy(alpha = 0.14f)).border(1.dp, c.copy(alpha = 0.4f), CircleShape).padding(horizontal = 9.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(typeIcon(t), null, Modifier.size(12.dp), tint = c)
+                    Spacer(Modifier.width(5.dp))
+                    Text(ContentTypes.dayUi(t).short, style = MaterialTheme.typography.labelSmall, color = c, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.width(5.dp))
+                    Text(n.toString(), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
+                }
             }
         }
-        // Stock per type (compact chips)
-        item {
-            Column {
-                Text("Stock by type", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 2.dp, bottom = 6.dp))
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    ContentTypes.TYPE_CYCLE.forEach { t ->
-                        val n = plan.buckets[t]?.size ?: 0
-                        val c = typeColor(t)
-                        Row(Modifier.clip(CircleShape).background(c.copy(alpha = 0.14f)).border(1.dp, c.copy(alpha = 0.4f), CircleShape).padding(horizontal = 10.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text(ContentTypes.dayUi(t).short, style = MaterialTheme.typography.labelSmall, color = c, fontWeight = FontWeight.Bold)
-                            Spacer(Modifier.width(6.dp))
-                            Text(n.toString(), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
-                        }
+        val waiting = plan.waitingForStock
+        if (waiting.isNotEmpty()) {
+            Text(
+                "Low stock (need ${ContentTypes.MIN_STOCK_FOR_DAY}): " + waiting.joinToString(", ") { "${ContentTypes.dayUi(it.first).short} ${it.second}" },
+                style = MaterialTheme.typography.bodySmall, color = Warn, modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+            )
+        }
+        Spacer(Modifier.height(14.dp))
+
+        if (days.isEmpty()) {
+            EmptyState("No planned days yet. Upload files to build the schedule.", Modifier.padding(horizontal = 16.dp))
+        } else {
+            // Date strip (syncs with the card pager)
+            LazyRow(state = strip, contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                itemsIndexed(days) { i, d ->
+                    val sel = pager.currentPage == i
+                    val c = typeColor(d.dayType)
+                    Column(
+                        Modifier.width(46.dp).clip(RoundedCornerShape(14.dp))
+                            .background(if (sel) BrandYellow else MaterialTheme.colorScheme.surfaceContainerHigh)
+                            .then(if (d.isToday && !sel) Modifier.border(1.5.dp, BrandYellow, RoundedCornerShape(14.dp)) else Modifier)
+                            .clickable { scope.launch { pager.animateScrollToPage(i) } }
+                            .padding(vertical = 8.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(d.date.dayOfWeek.name.take(3), style = MaterialTheme.typography.labelSmall, color = if (sel) BrandDark.copy(alpha = 0.7f) else if (d.isWeekend) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(d.date.dayOfMonth.toString(), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = if (sel) BrandDark else MaterialTheme.colorScheme.onSurface)
+                        Spacer(Modifier.height(3.dp))
+                        Box(Modifier.size(6.dp).clip(CircleShape).background(if (d.dayType.isBlank()) MaterialTheme.colorScheme.outline else if (sel) BrandDark else c))
                     }
                 }
-                val waiting = plan.waitingForStock
-                if (waiting.isNotEmpty()) {
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "Low stock (need ${ContentTypes.MIN_STOCK_FOR_DAY}): " + waiting.joinToString(", ") { "${ContentTypes.dayUi(it.first).short} ${it.second}" },
-                        style = MaterialTheme.typography.bodySmall, color = Warn
-                    )
+            }
+            Spacer(Modifier.height(10.dp))
+
+            // Current page label + jump to today
+            val cur = days.getOrNull(pager.currentPage)
+            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(cur?.let { RealTime.longKey(it.dateKey) } ?: "", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                val todayIdx = days.indexOfFirst { it.isToday }
+                if (todayIdx >= 0 && todayIdx != pager.currentPage) TextButton(onClick = { scope.launch { pager.animateScrollToPage(todayIdx) } }, contentPadding = PaddingValues(horizontal = 10.dp)) {
+                    Icon(Icons.Default.Today, null, Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text("Today")
                 }
-                // sdVersion is read here so day cards refresh when holiday feeds finish syncing
-                Text("Special days: $sdStatus" + if (sdVersion > 0) "" else "", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp))
+            }
+            Spacer(Modifier.height(6.dp))
+
+            // Card pager - swipe between days, neighbours peek at the edges
+            HorizontalPager(
+                state = pager,
+                contentPadding = PaddingValues(horizontal = 22.dp),
+                pageSpacing = 12.dp,
+                verticalAlignment = Alignment.Top,
+                modifier = Modifier.fillMaxWidth(),
+            ) { i ->
+                val d = days[i]
+                DayCard(d, vm.specialDays, Modifier.fillMaxWidth(),
+                    onItem = { vm.selectedItem.value = it },
+                    onItemLong = { moveItem = it to d },
+                    onEmpty = { pinTarget = d })
             }
         }
-        item { PagerBar(page, totalPages, onPrev = { page-- }, onNext = { page++ }, label = if (visible.isEmpty()) "" else "${RealTime.prettyKey(visible.first().dateKey)} → ${RealTime.prettyKey(visible.last().dateKey)}") }
 
-        // One full-width day card per row — readable titles
-        items(visible) { d ->
-            DayCard(d, vm.specialDays, Modifier.fillMaxWidth(),
-                onItem = { vm.selectedItem.value = it },
-                onItemLong = { moveItem = it to d },
-                onEmpty = { pinTarget = d })
-        }
-        item { Spacer(Modifier.height(56.dp)) }
+        // sdVersion is read here so day cards refresh when holiday feeds finish syncing
+        Text("Special days: $sdStatus" + if (sdVersion > 0) " · synced" else "", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp))
+        Spacer(Modifier.height(40.dp))
     }
 
     // --- Pick a file to pin into an empty slot ---
@@ -149,7 +217,7 @@ fun ScheduleScreen(vm: MainViewModel) {
                     OutlinedTextField(q, { q = it }, Modifier.fillMaxWidth(), placeholder = { Text("Search") }, singleLine = true)
                     Spacer(Modifier.height(8.dp))
                     LazyColumn(Modifier.height(320.dp)) {
-                        items(candidates) { it ->
+                        items(candidates) {
                             Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable { vm.pin(it, day.dateKey); pinTarget = null }.padding(vertical = 6.dp, horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                                 ItemThumb(it, Modifier.width(38.dp), ratio = 3f / 4f, corner = 8)
                                 Spacer(Modifier.width(10.dp))
@@ -178,93 +246,136 @@ fun ScheduleScreen(vm: MainViewModel) {
     }
 }
 
+/**
+ * One planner day, styled after the reference design: light card with yellow top edge (today = solid yellow),
+ * holiday ribbon with flag + country (tap to cycle when several), date badge, type pill, content box, slot rows.
+ */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun DayCard(d: PlannedDay, specialDays: SpecialDays, modifier: Modifier = Modifier, onItem: (QueueItem) -> Unit, onItemLong: (QueueItem) -> Unit, onEmpty: () -> Unit) {
-    val c = typeColor(d.dayType)
+    val today = d.isToday
     val special = specialDays.forDate(d.dateKey)
+    var holidayIdx by remember(d.dateKey) { mutableIntStateOf(0) }
+    val cardBg = if (today) BrandYellow else PlannerCard
+    val ink = BrandDark
+    val muted = if (today) BrandDark.copy(alpha = 0.65f) else PlannerMuted
+    val rowBg = if (today) Color.White.copy(alpha = 0.55f) else PlannerCream
+    val hasType = d.dayType.isNotBlank()
     val filled = d.slots.count { it != null }
-    Card(
-        modifier = modifier,
-        shape = MaterialTheme.shapes.medium,
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(if (d.isToday) 2.dp else 1.dp, if (d.isToday) BrandYellow else MaterialTheme.colorScheme.outlineVariant),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-    ) {
-        Row(Modifier.padding(12.dp)) {
-            // Date column
-            Column(Modifier.width(48.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                Box(
-                    Modifier.size(44.dp).clip(RoundedCornerShape(12.dp)).background(if (d.isToday) BrandYellow else MaterialTheme.colorScheme.surfaceVariant),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(d.date.dayOfMonth.toString(), style = MaterialTheme.typography.titleLarge, color = if (d.isToday) BrandDark else MaterialTheme.colorScheme.onSurface)
+
+    Column(modifier.clip(RoundedCornerShape(22.dp)).background(cardBg)) {
+        // ---- Holiday ribbon / top edge
+        if (special.isNotEmpty()) {
+            val idx = holidayIdx % special.size
+            val s = special[idx]
+            val countries = s.countries ?: emptyList<String>()
+            Row(
+                Modifier.fillMaxWidth().background(BrandDark)
+                    .clickable(enabled = special.size > 1) { holidayIdx = (idx + 1) % special.size }
+                    .padding(start = 14.dp, end = 12.dp, top = 9.dp, bottom = 9.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (countries.isNotEmpty()) {
+                    Text(Country.flag(countries[0]), fontSize = 18.sp, lineHeight = 20.sp)
+                } else {
+                    Icon(holidayIcon(s.icon), null, Modifier.size(16.dp), tint = BrandYellow)
                 }
-                Spacer(Modifier.height(4.dp))
-                Text(if (d.isToday) "TODAY" else d.date.dayOfWeek.name.take(3), style = MaterialTheme.typography.labelSmall, color = if (d.isToday) MaterialTheme.colorScheme.primary else if (d.isWeekend) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(d.date.month.name.take(3), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.width(9.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(s.name.uppercase(), color = BrandYellow, fontSize = 11.sp, lineHeight = 13.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 0.6.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        if (countries.isEmpty()) "International day"
+                        else countries.take(3).joinToString(", ") { Country.name(it) } + if (countries.size > 3) " +${countries.size - 3} more" else "",
+                        color = Color.White.copy(alpha = 0.75f), style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis
+                    )
+                }
+                if (special.size > 1) {
+                    Spacer(Modifier.width(8.dp))
+                    Box(Modifier.clip(CircleShape).background(Color.White.copy(alpha = 0.16f)).padding(horizontal = 8.dp, vertical = 3.dp)) {
+                        Text("${idx + 1}/${special.size}", color = Color.White, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                    }
+                }
             }
-            Spacer(Modifier.width(12.dp))
-            // Content column
-            Column(Modifier.weight(1f)) {
+        } else {
+            Box(Modifier.fillMaxWidth().height(6.dp).background(if (today) BrandAmber else BrandYellow))
+        }
+
+        Column(Modifier.padding(14.dp)) {
+            // ---- Header: date badge + weekday + type pill
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(42.dp).clip(RoundedCornerShape(12.dp)).background(if (today) BrandDark else BrandYellow), contentAlignment = Alignment.Center) {
+                    Text(d.date.dayOfMonth.toString(), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.ExtraBold, color = if (today) BrandYellow else BrandDark)
+                }
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(if (today) "TODAY" else d.date.dayOfWeek.name.take(3), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, letterSpacing = 0.8.sp, color = if (!today && d.isWeekend) MaterialTheme.colorScheme.error else ink)
+                    Text(d.date.month.name.take(3), style = MaterialTheme.typography.labelSmall, letterSpacing = 0.8.sp, color = muted)
+                }
+                if (hasType) TypePill(d.dayType)
+                else Text("$filled/${d.slotCount}", style = MaterialTheme.typography.labelMedium, color = muted)
+            }
+            Spacer(Modifier.height(12.dp))
+
+            // ---- Content box
+            Column(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(rowBg)
+                    .border(1.dp, if (today) BrandDark.copy(alpha = 0.12f) else BrandYellow.copy(alpha = 0.7f), RoundedCornerShape(12.dp))
+                    .padding(horizontal = 12.dp, vertical = 9.dp)
+            ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(if (d.dayType.isBlank()) "No type" else ContentTypes.dayUi(d.dayType).label, style = MaterialTheme.typography.titleSmall, color = c, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                    Spacer(Modifier.width(6.dp))
-                    Text("$filled/${d.slotCount}", style = MaterialTheme.typography.labelMedium, color = if (d.slotCount > 0 && filled >= d.slotCount) Ok else MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(if (today) "TODAY'S CONTENT" else "CONTENT", fontSize = 9.5.sp, lineHeight = 11.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold, color = muted, modifier = Modifier.weight(1f))
+                    Text("$filled/${d.slotCount}", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = if (d.slotCount > 0 && filled >= d.slotCount) PlannerOk else muted)
                 }
+                Text(if (hasType) ContentTypes.dayUi(d.dayType).label else "No type has ${ContentTypes.MIN_STOCK_FOR_DAY}+ files", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 if (d.switchedFrom != null) {
-                    Text("${ContentTypes.dayUi(d.switchedFrom).short} skipped (< ${ContentTypes.MIN_STOCK_FOR_DAY} files)", style = MaterialTheme.typography.labelSmall, color = Warn, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("${ContentTypes.dayUi(d.switchedFrom).short} skipped (< ${ContentTypes.MIN_STOCK_FOR_DAY} files)", style = MaterialTheme.typography.labelSmall, color = PlannerWarn, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-                if (special.isNotEmpty()) {
-                    Spacer(Modifier.height(4.dp))
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        special.take(3).forEach { s ->
-                            Box(Modifier.clip(CircleShape).background(MaterialTheme.colorScheme.surfaceVariant).padding(horizontal = 7.dp, vertical = 2.dp)) {
-                                Text("${SpecialDays.emoji(s.icon)} ${s.label}", fontSize = 10.sp, lineHeight = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            Spacer(Modifier.height(10.dp))
+
+            // ---- Slots
+            if (d.slotCount == 0) {
+                Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(PlannerOk.copy(alpha = if (today) 0.18f else 0.12f)).padding(horizontal = 12.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.CheckCircle, null, Modifier.size(18.dp), tint = PlannerOk)
+                    Spacer(Modifier.width(8.dp))
+                    Text("All uploads done for this day", color = PlannerOk, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
+                }
+            } else {
+                d.slots.forEachIndexed { i, it ->
+                    if (i > 0) Spacer(Modifier.height(8.dp))
+                    if (it == null) {
+                        Row(
+                            Modifier.fillMaxWidth().height(50.dp).clip(RoundedCornerShape(12.dp))
+                                .border(1.5.dp, BrandDark.copy(alpha = 0.22f), RoundedCornerShape(12.dp))
+                                .clickable(onClick = onEmpty).padding(horizontal = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            IconDot(Icons.Default.Add, ink, BrandDark.copy(alpha = 0.08f))
+                            Spacer(Modifier.width(10.dp))
+                            Column {
+                                Text("EMPTY SLOT", fontSize = 9.5.sp, lineHeight = 11.sp, letterSpacing = 0.8.sp, fontWeight = FontWeight.Bold, color = muted)
+                                Text("Tap to pin a file", style = MaterialTheme.typography.bodySmall, color = ink)
                             }
                         }
-                    }
-                }
-                Spacer(Modifier.height(8.dp))
-                if (d.slotCount == 0) {
-                    Box(Modifier.fillMaxWidth().height(40.dp).clip(RoundedCornerShape(10.dp)).background(Ok.copy(alpha = 0.12f)), contentAlignment = Alignment.Center) {
-                        Text("All uploads done \uD83C\uDF89", color = Ok, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
-                    }
-                } else {
-                    d.slots.forEachIndexed { i, it ->
-                        if (i > 0) Spacer(Modifier.height(6.dp))
-                        if (it == null) {
-                            Row(
-                                Modifier.fillMaxWidth().height(44.dp).clip(RoundedCornerShape(10.dp))
-                                    .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(10.dp))
-                                    .clickable(onClick = onEmpty).padding(horizontal = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(Icons.Default.Add, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Spacer(Modifier.width(8.dp))
-                                Text("Empty slot · tap to pin", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            }
-                        } else {
-                            Row(
-                                Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.surfaceVariant)
-                                    .combinedClickable(onClick = { onItem(it) }, onLongClick = { onItemLong(it) }).padding(6.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                ItemThumb(it, Modifier.width(36.dp), ratio = 3f / 4f, corner = 8)
+                    } else {
+                        val c = typeColor(it.dayType)
+                        Row(
+                            Modifier.fillMaxWidth().height(IntrinsicSize.Min).clip(RoundedCornerShape(12.dp)).background(rowBg)
+                                .combinedClickable(onClick = { onItem(it) }, onLongClick = { onItemLong(it) }),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(Modifier.width(4.dp).fillMaxHeight().background(if (today) BrandDark else BrandYellow))
+                            Row(Modifier.weight(1f).padding(start = 10.dp, end = 10.dp, top = 9.dp, bottom = 9.dp), verticalAlignment = Alignment.CenterVertically) {
+                                IconDot(typeIcon(it.dayType), BrandDark, c.copy(alpha = 0.35f))
                                 Spacer(Modifier.width(10.dp))
                                 Column(Modifier.weight(1f)) {
-                                    Text(it.displayTitle, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                    Spacer(Modifier.height(3.dp))
-                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                        TypeBadge(it.dayType)
-                                        if (it.isPinned) Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Icon(Icons.Default.PushPin, null, Modifier.size(11.dp), tint = MaterialTheme.colorScheme.primary)
-                                            Spacer(Modifier.width(2.dp))
-                                            Text("Pinned", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                                        }
-                                    }
+                                    Text(ContentTypes.dayUi(it.dayType).short.uppercase(), fontSize = 9.5.sp, lineHeight = 11.sp, letterSpacing = 0.8.sp, fontWeight = FontWeight.Bold, color = muted)
+                                    Text(it.displayTitle, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
                                 }
-                                if (it.isPinned) Icon(Icons.Default.Close, "Unpin", Modifier.size(18.dp).clickable { onItemLong(it) }, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                if (it.isPinned) {
+                                    Spacer(Modifier.width(6.dp))
+                                    Icon(Icons.Default.PushPin, "Pinned", Modifier.size(15.dp), tint = ink.copy(alpha = 0.6f))
+                                }
                             }
                         }
                     }
@@ -287,7 +398,7 @@ fun MoveDialog(item: QueueItem, day: PlannedDay, onDismiss: () -> Unit, onMove: 
                 Spacer(Modifier.height(10.dp))
                 TextButton(onClick = { showPicker = true }) { Text("Pin / move to another date…") }
                 TextButton(onClick = { onMove(day.dateKey) }) { Text("Pin here (${RealTime.prettyKey(day.dateKey)})") }
-                if (item.isPinned) TextButton(onClick = onUnpin) { Text("Unpin (back to auto)", color = MaterialTheme.colorScheme.error) }
+                if (item.isPinned) TextButton(onClick = onUnpin) { Icon(Icons.Default.Close, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.error); Spacer(Modifier.width(6.dp)); Text("Unpin (back to auto)", color = MaterialTheme.colorScheme.error) }
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },

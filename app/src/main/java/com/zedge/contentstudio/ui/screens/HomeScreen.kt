@@ -87,7 +87,7 @@ fun HomeScreen(vm: MainViewModel, onOpenPage: (Page) -> Unit) {
                     Text(
                         when {
                             today == null -> "Loading schedule…"
-                            today.slotCount == 0 -> "All done for today \uD83C\uDF89"
+                            today.slotCount == 0 -> "All done for today"
                             else -> "${today.slotCount} ${ContentTypes.dayUi(today.dayType).label} left"
                         },
                         style = MaterialTheme.typography.headlineSmall, color = BrandDark, maxLines = 2, overflow = TextOverflow.Ellipsis
