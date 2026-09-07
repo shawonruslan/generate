@@ -239,6 +239,6 @@ class GitHubRepo(context: Context, private val http: OkHttpClient, private val z
     companion object {
         const val GH_API = "https://api.github.com"
         const val GENERATOR_WORKFLOW = "generator.yml"
-        val TARGET_ACCOUNTS = listOf("zedge_1", "zedge_2", "zedge_3")
+        val TARGET_ACCOUNTS = listOf("zedge_1", "zedge_2", "zedge_3", "zedge_4", "all_accounts")
     }
 }

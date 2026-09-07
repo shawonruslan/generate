@@ -60,20 +60,20 @@ fun DistributeScreen(vm: MainViewModel) {
     LazyColumn(contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         // Round robin visual
         item {
-            SectionCard("Round-robin", "Each file goes to the next account in turn: ZEDGE1 → ZEDGE2 → ZEDGE3.") {
+            SectionCard("Round-robin", "Each file goes to the next account in turn: ZEDGE1 → ZEDGE2 → ZEDGE3 → ZEDGE4.") {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
                     Accounts.distOrder.forEachIndexed { i, key ->
                         val next = i == pointer
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Box(
-                                Modifier.size(52.dp).clip(CircleShape).background(if (next) BrandYellow else MaterialTheme.colorScheme.surfaceVariant)
+                                Modifier.size(46.dp).clip(CircleShape).background(if (next) BrandYellow else MaterialTheme.colorScheme.surfaceVariant)
                                     .border(if (next) 2.dp else 1.dp, if (next) BrandAmber else MaterialTheme.colorScheme.outlineVariant, CircleShape),
                                 contentAlignment = Alignment.Center
                             ) { Text(Accounts.byKey(key).label.replace("ZEDGE", "Z"), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = if (next) BrandDark else MaterialTheme.colorScheme.onSurface) }
                             Spacer(Modifier.height(4.dp))
                             Text(if (next) "NEXT" else Accounts.byKey(key).label, style = MaterialTheme.typography.labelSmall, color = if (next) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                        if (i < Accounts.distOrder.size - 1) Icon(Icons.Default.ArrowForward, null, Modifier.padding(horizontal = 10.dp).padding(bottom = 18.dp).size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (i < Accounts.distOrder.size - 1) Icon(Icons.Default.ArrowForward, null, Modifier.padding(horizontal = 4.dp).padding(bottom = 18.dp).size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }

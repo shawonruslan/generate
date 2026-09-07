@@ -6,7 +6,7 @@ feature is re-implemented in Kotlin.
 | Layer | Files |
 |---|---|
 | Core constants, real-time clock, type cycle | `core/Core.kt` |
-| Firebase RTDB REST client (3 accounts, server-time sync) | `data/FirebaseRtdb.kt` |
+| Firebase RTDB REST client (4 accounts - Shimul, server-time sync) | `data/FirebaseRtdb.kt` |
 | Queue / upload state models | `data/Models.kt` |
 | Media (EXIF-safe image read, video frame grab, JPEG thumbs) | `data/Media.kt` |
 | Upload, sets, video, distribution, pins, copy-to-accounts, R2 gateway | `data/QueueRepository.kt` |
