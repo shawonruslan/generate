@@ -17,6 +17,10 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -435,17 +439,17 @@ class QueueRepository(private val context: Context) {
         var files = 0
         var failed = 0
         if (toDelete.isNotEmpty()) {
-            val results = kotlinx.coroutines.coroutineScope {
-                val sem = kotlinx.coroutines.sync.Semaphore(6)
+            val results = coroutineScope {
+                val sem = Semaphore(6)
                 toDelete.map { url ->
-                    kotlinx.coroutines.async(Dispatchers.IO) {
+                    async(Dispatchers.IO) {
                         sem.withPermit {
                             try { r2.delete(url) } catch (e: Exception) {
                                 android.util.Log.w("QueueRepository", "R2 delete failed: $url (${e.message})"); false
                             }
                         }
                     }
-                }.map { it.await() }
+                }.awaitAll()
             }
             files = results.count { it }
             failed = results.size - files

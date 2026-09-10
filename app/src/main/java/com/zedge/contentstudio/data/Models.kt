@@ -44,20 +44,6 @@ class QueueItem(val id: String, val raw: JSONObject) {
             return "${n("durationBefore")}s -> ${n("durationAfter")}s (trimmed ${n("trimmedSec")}s) | peak ${n("peakBeforeDb")} -> ${n("peakAfterDb")} dB | gain +${n("gainDb")} dB (boost ${n("boostPct")}%)"
         }
 
-    companion object {
-        private const val PUSH_CHARS = "-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz"
-        /** Firebase push ids encode their creation time (ms) in the first 8 characters. */
-        fun pushIdToMs(id: String): Long {
-            if (id.length < 8) return 0L
-            var ts = 0L
-            for (i in 0 until 8) {
-                val idx = PUSH_CHARS.indexOf(id[i])
-                if (idx < 0) return 0L
-                ts = ts * 64 + idx
-            }
-            return ts
-        }
-    }
     /** Bot marks rows `failed` (upload error) or `error` (migration / invalid file). */
     val isFailed: Boolean get() = status == "failed" || status == "error"
     val distributedTo: String? get() = raw.optString("distributedTo", "").ifBlank { null }
@@ -101,6 +87,18 @@ class QueueItem(val id: String, val raw: JSONObject) {
         }
 
     companion object {
+        private const val PUSH_CHARS = "-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz"
+        /** Firebase push ids encode their creation time (ms) in the first 8 characters. */
+        fun pushIdToMs(id: String): Long {
+            if (id.length < 8) return 0L
+            var ts = 0L
+            for (i in 0 until 8) {
+                val idx = PUSH_CHARS.indexOf(id[i])
+                if (idx < 0) return 0L
+                ts = ts * 64 + idx
+            }
+            return ts
+        }
         fun listFrom(data: Any?): List<QueueItem> {
             val o = data as? JSONObject ?: return emptyList()
             return Json.keys(o).mapNotNull { k ->
