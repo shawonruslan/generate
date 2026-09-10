@@ -12,6 +12,8 @@ import com.zedge.contentstudio.core.RealTime
 import com.zedge.contentstudio.data.LocalFile
 import com.zedge.contentstudio.data.QueueItem
 import com.zedge.contentstudio.data.QueueRepository
+import com.zedge.contentstudio.domain.GateHealth
+import com.zedge.contentstudio.domain.RunSchedule
 import com.zedge.contentstudio.data.UploadState
 import com.zedge.contentstudio.data.VideoUtils
 import com.zedge.contentstudio.domain.ImportUnit
@@ -77,6 +79,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val uploadState: StateFlow<UploadState?> = repo.uploadState
     val connected: StateFlow<Boolean> = repo.connected
     val busy: StateFlow<Boolean> = repo.busy
+    val schedules: StateFlow<Map<String, List<Int>>> = repo.schedules
+    val scheduleSource: StateFlow<Map<String, String>> = repo.scheduleSource
+    val gateHealth: StateFlow<Map<String, GateHealth?>> = repo.gateHealth
+
+    fun saveSchedule(key: String, windows: List<Int>) {
+        val err = RunSchedule.validate(windows)
+        if (err != null) { toast(err, "error"); return }
+        viewModelScope.launch {
+            runCatching { repo.saveSchedule(key, windows) }
+                .onSuccess { toast("${key.replace("zedge", "ZEDGE ")} schedule saved - bot uses it from the next ping", "ok") }
+                .onFailure { toast("Save failed: ${it.message}", "error") }
+        }
+    }
 
     private val _messages = MutableSharedFlow<UiMessage>(extraBufferCapacity = 16)
     val messages: SharedFlow<UiMessage> = _messages

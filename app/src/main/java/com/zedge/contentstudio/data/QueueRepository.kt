@@ -21,6 +21,9 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import org.json.JSONObject
+import org.json.JSONArray
+import com.zedge.contentstudio.domain.GateHealth
+import com.zedge.contentstudio.domain.RunSchedule
 import java.util.concurrent.TimeUnit
 
 /** Progress callback text for long uploads. */
@@ -67,7 +70,70 @@ class QueueRepository(private val context: Context) {
     var distPointer = 0
     val distPushedNames = HashSet<String>()
 
-    init { connect(_activeKey.value) }
+    // ---- v9: live upload schedule + gate health for every account ----
+    private val _schedules = MutableStateFlow(RunSchedule.DEFAULT_WINDOWS)
+    val schedules: StateFlow<Map<String, List<Int>>> = _schedules
+    private val _scheduleSource = MutableStateFlow<Map<String, String>>(emptyMap())   // key -> "firebase" | "default"
+    val scheduleSource: StateFlow<Map<String, String>> = _scheduleSource
+    private val _gateHealth = MutableStateFlow<Map<String, GateHealth?>>(emptyMap())
+    val gateHealth: StateFlow<Map<String, GateHealth?>> = _gateHealth
+
+    init {
+        connect(_activeKey.value)
+        for (acc in Accounts.all) subscribeSchedule(acc.key)
+    }
+
+    private fun subscribeSchedule(key: String) {
+        val d = db(key)
+        scope.launch {
+            val sch = d.stream("dashboardSettings/schedule")
+            val gate = d.stream("dashboardSettings/gate")
+            sch.launchIn(this)
+            gate.launchIn(this)
+            launch {
+                sch.snapshot.collect { snap ->
+                    if (!snap.ready) return@collect
+                    val obj = snap.data as? JSONObject
+                    val arr = obj?.optJSONArray("windows")
+                    val w = arr?.let { a -> (0 until a.length()).mapNotNull { i -> a.optInt(i, -1).takeIf { it in 0..23 } } }?.takeIf { it.isNotEmpty() }
+                    RunSchedule.setWindows(key, w)
+                    _schedules.value = RunSchedule.windows
+                    _scheduleSource.value = _scheduleSource.value + (key to (if (w != null) "firebase" else "default"))
+                    RealTime.bump()   // re-plan the calendar with the new windows
+                }
+            }
+            launch {
+                gate.snapshot.collect { snap ->
+                    if (!snap.ready) return@collect
+                    _gateHealth.value = _gateHealth.value + (key to parseGate(snap.data as? JSONObject))
+                }
+            }
+        }
+    }
+
+    private fun parseGate(o: JSONObject?): GateHealth? {
+        if (o == null) return null
+        val today = RealTime.key(RealTime.dhakaDate(0))   // gate writes YYYY-MM-DD
+        val runsObj = o.optJSONObject("runs")?.optJSONObject(today)
+        val runs = runsObj?.let { r -> Json.keys(r).sortedBy { it.toIntOrNull() ?: 0 }.map { k ->
+            val e = r.optJSONObject(k)
+            "W${(k.toIntOrNull() ?: 0) + 1} ${e?.optString("dhaka") ?: ""}" + (if (e?.optBoolean("catchUp") == true) " (catch-up)" else "")
+        } } ?: emptyList()
+        val wu = o.optJSONArray("windowsUsed")?.let { a -> (0 until a.length()).map { a.optInt(it) } }
+        return GateHealth(
+            lastPing = o.optLong("lastPing", 0L).takeIf { it > 0 },
+            lastPingDhaka = o.optString("lastPingDhaka").takeIf { it.isNotBlank() },
+            lastDecision = o.optString("lastDecision").takeIf { it.isNotBlank() },
+            lastRunDhaka = o.optString("lastRunDhaka").takeIf { it.isNotBlank() },
+            windowsUsed = wu, runsToday = runs,
+        )
+    }
+
+    /** Save a new upload schedule for one account (same payload as the dashboard). */
+    suspend fun saveSchedule(key: String, windows: List<Int>) {
+        val arr = JSONArray(); windows.sorted().forEach { arr.put(it) }
+        db(key).set("dashboardSettings/schedule", Json.obj("windows" to arr, "updatedAt" to System.currentTimeMillis(), "updatedBy" to "app"))
+    }
 
     fun connect(key: String) {
         val k = if (Accounts.isValid(key)) key else "zedge1"

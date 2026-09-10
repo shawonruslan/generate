@@ -22,26 +22,57 @@ data class PlannedRun(
     val passed: Boolean,       // today only: window already over and this slot did not upload
     val live: Boolean,         // today only: we are inside the run window right now
     val isNext: Boolean,       // first run that has not happened yet
+    val startMs: Long = 0L,    // epoch ms (Dhaka) of the gate slot
+    val endMs: Long = 0L,      // startMs + max random delay
+    val windowEndMs: Long = 0L,
 ) {
     val startLabel: String get() = RunSchedule.clock(start)
     val endLabel: String get() = RunSchedule.clock(end)
     val profileLabel: String get() = if (profile < 0) "Profile ?" else "Profile #${profile + 1}" + (if (profileKnown) "" else " (est.)")
 }
 
+/** Gate health written by the workflow gate job (dashboardSettings/gate). */
+data class GateHealth(
+    val lastPing: Long?, val lastPingDhaka: String?, val lastDecision: String?,
+    val lastRunDhaka: String?, val windowsUsed: List<Int>?, val runsToday: List<String>,
+) {
+    val minutesSincePing: Long? get() = lastPing?.let { (System.currentTimeMillis() - it) / 60000 }
+}
+
 /** Exact port of the workflow gate hash + profile rotation state manager. */
 object RunSchedule {
-    /** Window start hours (Asia/Dhaka) per account - must match each zedgeN.yml gate job. */
-    val WINDOWS: Map<String, List<Int>> = mapOf(
+    /** Validate a proposed schedule; null = OK, otherwise the error message. */
+    fun validate(w: List<Int>): String? {
+        if (w.size != 3) return "Need 3 windows"
+        val s = w.sorted()
+        for (i in s.indices) {
+            if (s[i] !in 0..23) return "Hour out of range"
+            if (i > 0 && s[i] - s[i - 1] < WINDOW_HOURS) return "Windows overlap - keep at least $WINDOW_HOURS h between start hours"
+        }
+        if (s.last() + WINDOW_HOURS > 24) return "Last window must end before midnight (start \u2264 9 PM)"
+        return null
+    }
+    fun hourLabel(h: Int): String { val hh = if (h % 12 == 0) 12 else h % 12; return "$hh:00 " + (if (h >= 12) "PM" else "AM") }
+
+    /** Default window start hours (Asia/Dhaka) per account - same as DEFAULT_WINDOWS in each zedgeN.yml gate job. */
+    val DEFAULT_WINDOWS: Map<String, List<Int>> = mapOf(
         "zedge1" to listOf(4, 10, 16),
         "zedge2" to listOf(5, 11, 17),
         "zedge3" to listOf(10, 16, 20),
         "zedge4" to listOf(11, 17, 21),
     )
+
+    /** Live windows (Firebase dashboardSettings/schedule per account); falls back to DEFAULT_WINDOWS. */
+    @Volatile var windows: Map<String, List<Int>> = DEFAULT_WINDOWS
+    fun setWindows(key: String, w: List<Int>?) {
+        val valid = w?.filter { it in 0..23 }?.takeIf { it.isNotEmpty() }
+        windows = windows + (key to (valid ?: DEFAULT_WINDOWS.getValue(key)))
+    }
     const val WINDOW_HOURS = 3
     const val SLOT_MIN = 30
     const val MAX_DELAY_MIN = 14
 
-    fun windowsFor(accountKey: String): List<Int> = WINDOWS[accountKey] ?: WINDOWS.getValue("zedge1")
+    fun windowsFor(accountKey: String): List<Int> = windows[accountKey] ?: DEFAULT_WINDOWS[accountKey] ?: DEFAULT_WINDOWS.getValue("zedge1")
 
     /** JS: for (const c of seed) hash = (hash * 31 + c.charCodeAt(0)) >>> 0 */
     fun gateHash(seed: String): Long {
@@ -119,22 +150,26 @@ object RunSchedule {
                 val live = d.isToday && nowMin >= minutesOfDay(start) && nowMin <= wEndMin
                 val isNext = !nextMarked && !passed
                 if (isNext) nextMarked = true
-                PlannedRun(w, wStart, wEnd, start, end, p, rot.known, passed, live, isNext)
+                PlannedRun(w, wStart, wEnd, start, end, p, rot.known, passed, live, isNext,
+                    startMs = RealTime.dhakaEpochMs(d.date, minutesOfDay(start)), endMs = RealTime.dhakaEpochMs(d.date, minutesOfDay(end)), windowEndMs = RealTime.dhakaEpochMs(d.date, wEndMin))
             }
             d.copy(runs = runs)
         }
     }
 
     /** Today's three run windows for one account (for the all-accounts strip). */
-    data class TodayRun(val windowIdx: Int, val start: LocalTime, val end: LocalTime, val passed: Boolean, val live: Boolean)
+    data class TodayRun(val windowIdx: Int, val start: LocalTime, val end: LocalTime, val passed: Boolean, val live: Boolean,
+                        val startMs: Long = 0L, val endMs: Long = 0L, val windowEndMs: Long = 0L)
 
     fun todayRuns(accountKey: String): List<TodayRun> {
-        val dateKey = RealTime.dhakaTodayString()
+        val today = RealTime.dhakaDate(0)
+        val dateKey = RealTime.key(today)   // YYYY-MM-DD - same seed format as the bot gate
         val nowMin = minutesOfDay(RealTime.dhakaNow().toLocalTime())
         return windowsFor(accountKey).indices.mapNotNull { w ->
             val (s, e) = runTime(dateKey, w, accountKey) ?: return@mapNotNull null
             val wEndMin = windowsFor(accountKey)[w] * 60 + WINDOW_HOURS * 60
-            TodayRun(w, s, e, passed = nowMin > wEndMin, live = nowMin >= minutesOfDay(s) && nowMin <= wEndMin)
+            TodayRun(w, s, e, passed = nowMin > wEndMin, live = nowMin >= minutesOfDay(s) && nowMin <= wEndMin,
+                startMs = RealTime.dhakaEpochMs(today, minutesOfDay(s)), endMs = RealTime.dhakaEpochMs(today, minutesOfDay(e)), windowEndMs = RealTime.dhakaEpochMs(today, wEndMin))
         }
     }
 }

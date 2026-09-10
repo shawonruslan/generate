@@ -125,6 +125,9 @@ object RealTime {
     }
 
     fun dhakaNow(): LocalDateTime = Instant.ofEpochMilli(now()).atZone(DHAKA).toLocalDateTime()
+    /** Epoch ms of `minutesOfDay` on the given Dhaka calendar day. */
+    fun dhakaEpochMs(day: LocalDate, minutesOfDay: Int): Long =
+        day.atStartOfDay(DHAKA).toInstant().toEpochMilli() + minutesOfDay * 60_000L
     fun dhakaDate(offsetDays: Int = 0): LocalDate = dhakaNow().toLocalDate().plusDays(offsetDays.toLong())
 
     /** "YYYY-MM-DD" key used for pins and calendar days. */

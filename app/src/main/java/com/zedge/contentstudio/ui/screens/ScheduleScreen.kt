@@ -54,6 +54,21 @@ import com.zedge.contentstudio.domain.SchedulePlan
 import com.zedge.contentstudio.ui.theme.Danger
 import androidx.compose.material.icons.filled.Today
 import androidx.compose.material3.AlertDialog
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
+import kotlinx.coroutines.delay
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.material.icons.filled.HourglassEmpty
+import com.zedge.contentstudio.ui.components.SectionCard
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.Button
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -141,6 +156,10 @@ fun ScheduleScreen(vm: MainViewModel) {
         // Exact run times today - all four accounts (pure math, mirrors the workflow gate hash)
         val activeKey by vm.activeKey.collectAsStateWithLifecycle()
         TodayRunStrip(activeKey, plan)
+        Spacer(Modifier.height(12.dp))
+
+        // v9: edit upload windows (saved to Firebase, read by the bot) + cron health
+        ScheduleSettingsCard(vm, activeKey)
         Spacer(Modifier.height(12.dp))
 
         // Stock per type - one horizontal strip of equal-size tiles, all text left-aligned
@@ -367,86 +386,317 @@ fun DayCard(d: PlannedDay, specialDays: SpecialDays, modifier: Modifier = Modifi
                 }
             } else {
                 d.slots.forEachIndexed { i, it ->
-                    if (i > 0) Spacer(Modifier.height(8.dp))
-                    val run = d.runAt(i)
-                    val hasRunInfo = d.runs.isNotEmpty()
-                    if (it == null) {
-                        Row(
-                            Modifier.fillMaxWidth().heightIn(min = 52.dp).clip(RoundedCornerShape(14.dp))
-                                .background(BrandDark.copy(alpha = if (today) 0.06f else 0.035f))
-                                .border(1.5.dp, BrandDark.copy(alpha = 0.18f), RoundedCornerShape(14.dp))
-                                .clickable(onClick = onEmpty).padding(horizontal = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            IconDot(Icons.Default.Add, ink, BrandDark.copy(alpha = 0.08f))
-                            Spacer(Modifier.width(10.dp))
-                            Column {
-                                Text("EMPTY SLOT", fontSize = 9.5.sp, lineHeight = 11.sp, letterSpacing = 0.8.sp, fontWeight = FontWeight.Bold, color = muted)
-                                Text("Tap to pin a file", style = MaterialTheme.typography.bodySmall, color = ink)
-                                if (hasRunInfo) RunMetaLine(run, muted)
-                            }
-                        }
-                    } else {
-                        val c = typeColor(it.dayType)
-                        Row(
-                            Modifier.fillMaxWidth().height(IntrinsicSize.Min)
-                                .shadow(5.dp, RoundedCornerShape(14.dp), spotColor = BrandDark.copy(alpha = 0.4f))
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(Brush.horizontalGradient(listOf(Color.White.copy(alpha = if (today) 0.8f else 1f), rowBg)))
-                                .border(1.dp, Color.White.copy(alpha = 0.7f), RoundedCornerShape(14.dp))
-                                .combinedClickable(onClick = { onItem(it) }, onLongClick = { onItemLong(it) }),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(Modifier.width(5.dp).fillMaxHeight().background(Brush.verticalGradient(listOf(if (today) BrandDark else BrandYellow, if (today) BrandDark.copy(alpha = 0.7f) else BrandAmber))))
-                            Row(Modifier.weight(1f).padding(start = 10.dp, end = 10.dp, top = 9.dp, bottom = 9.dp), verticalAlignment = Alignment.CenterVertically) {
-                                IconDot(typeIcon(it.dayType), BrandDark, c.copy(alpha = 0.35f))
-                                Spacer(Modifier.width(10.dp))
-                                Column(Modifier.weight(1f)) {
-                                    Text(ContentTypes.dayUi(it.dayType).short.uppercase(), fontSize = 9.5.sp, lineHeight = 11.sp, letterSpacing = 0.8.sp, fontWeight = FontWeight.Bold, color = muted)
-                                    Text(it.displayTitle, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                    if (hasRunInfo) RunMetaLine(run, muted)
-                                }
-                                if (it.isPinned) {
-                                    Spacer(Modifier.width(6.dp))
-                                    Icon(Icons.Default.PushPin, "Pinned", Modifier.size(15.dp), tint = ink.copy(alpha = 0.6f))
-                                }
-                            }
-                        }
-                    }
+                    if (i > 0) Spacer(Modifier.height(10.dp))
+                    SlotCard(index = i, item = it, run = d.runAt(i), hasRunInfo = d.runs.isNotEmpty(), today = today, onItem = onItem, onItemLong = onItemLong, onEmpty = onEmpty)
                 }
             }
         }
     }
 }
 
-/** "6:30 PM - 6:44 PM  |  Profile #2  |  NEXT" line under a calendar slot. */
+// ---------------- v12: professional slot cards (same design as the web panel) ----------------
+private data class SlotTone(val c1: Color, val c2: Color, val soft: Color, val ink: Color)
+private fun slotTone(type: String?): SlotTone = when (if (type == "RINGTONE") "AUDIO" else type) {
+    "AUDIO" -> SlotTone(Color(0xFFFF9F1A), Color(0xFFE05D00), Color(0xFFFFF1E0), Color(0xFFB4520A))
+    "WALLPAPER" -> SlotTone(Color(0xFFFFE14D), Color(0xFFF2B400), Color(0xFFFFF8D6), Color(0xFF8A6A00))
+    else -> SlotTone(Color(0xFFFFCF5C), Color(0xFFC98A00), Color(0xFFFFF3C4), Color(0xFF7A5A00))
+}
+
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun RunMetaLine(run: PlannedRun?, muted: Color) {
-    Spacer(Modifier.height(3.dp))
-    if (run == null) {
-        Text("No run slot left this day (max 3) - rolls to next day", style = MaterialTheme.typography.labelSmall, color = Danger, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        return
+private fun SlotCard(index: Int, item: QueueItem?, run: PlannedRun?, hasRunInfo: Boolean, today: Boolean, onItem: (QueueItem) -> Unit, onItemLong: (QueueItem) -> Unit, onEmpty: () -> Unit) {
+    val shape = RoundedCornerShape(14.dp)
+    val passed = hasRunInfo && run?.passed == true
+    val live = hasRunInfo && run?.live == true
+    val isNext = hasRunInfo && run?.isNext == true && !live
+    val ringColor = when {
+        live -> Color(0xFFFF8A00)
+        isNext -> Color(0xFF22C55E)
+        item == null -> if (today) BrandDark.copy(alpha = 0.35f) else Color(0xFFE3D9BF)
+        else -> if (today) BrandDark.copy(alpha = 0.14f) else Color(0xFFEFE6CC)
     }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Icon(Icons.Default.Schedule, null, Modifier.size(12.dp), tint = if (run.passed) muted else PlannerInfo)
-        Spacer(Modifier.width(3.dp))
-        Text("${run.startLabel} - ${run.endLabel}", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = if (run.passed) muted else PlannerInfo)
-        Spacer(Modifier.width(8.dp))
-        Icon(Icons.Default.Person, null, Modifier.size(12.dp), tint = muted)
-        Spacer(Modifier.width(2.dp))
-        Text(run.profileLabel, style = MaterialTheme.typography.labelSmall, color = muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        if (run.passed) {
-            Spacer(Modifier.width(6.dp))
-            Text("window passed", style = MaterialTheme.typography.labelSmall, color = Warn)
-        } else if (run.isNext) {
-            Spacer(Modifier.width(6.dp))
-            Text(if (run.live) "RUNNING NOW" else "NEXT", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.ExtraBold, color = Color.White,
-                modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(Ok).padding(horizontal = 6.dp, vertical = 1.dp))
+    val ringW = if (live || isNext) 2.dp else 1.dp
+    val tone = slotTone(item?.dayType)
+    val cardAlpha = if (passed) 0.72f else 1f
+    val glow = when { live -> Color(0xFFFF8A00); isNext -> Color(0xFF22C55E); else -> BrandDark }
+    val base = Modifier.fillMaxWidth()
+        .graphicsLayer { this.alpha = cardAlpha }
+        .shadow(if (live) 10.dp else 5.dp, shape, spotColor = glow.copy(alpha = 0.45f))
+        .clip(shape)
+        .background(if (item == null) (if (today) Color.White.copy(alpha = 0.28f) else Color(0xFFFFFCF5)) else Color.White)
+        .border(ringW, ringColor, shape)
+    val clickMod = if (item == null) base.clickable(onClick = onEmpty) else base.combinedClickable(onClick = { onItem(item) }, onLongClick = { onItemLong(item) })
+    Row(clickMod.height(IntrinsicSize.Min)) {
+        if (item != null) Box(Modifier.width(4.dp).fillMaxHeight().background(Brush.verticalGradient(listOf(tone.c1, tone.c2))))
+        Column(Modifier.weight(1f)) {
+            // ---- header band: type chip + SLOT n
+            Row(
+                Modifier.fillMaxWidth()
+                    .then(if (item == null) Modifier else Modifier.background(Brush.verticalGradient(listOf(Color(0xFFFFFDF6), Color(0xFFFFF8E6)))))
+                    .padding(start = 10.dp, end = 8.dp, top = 5.dp, bottom = 5.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (item == null) SlotChip(Icons.Default.Add, "EMPTY SLOT", Color(0xFFF3F0E6), Color(0xFF8A7B55))
+                else SlotChip(typeIcon(item.dayType), ContentTypes.dayUi(item.dayType).label.uppercase(), tone.soft, tone.ink)
+                Spacer(Modifier.width(6.dp))
+                Text("SLOT ${index + 1}", fontSize = 9.sp, lineHeight = 11.sp, letterSpacing = 0.8.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFFB3A57F))
+                Spacer(Modifier.weight(1f))
+                if (hasRunInfo && run != null) RunStatusBadge(run)   // v12c compact
+            }
+            Box(Modifier.fillMaxWidth().height(1.dp).background(if (item == null) Color(0xFFEAE2CA) else Color(0xFFF4ECD6)))
+            // ---- body
+            Column(Modifier.fillMaxWidth().padding(start = 10.dp, end = 8.dp, top = 6.dp, bottom = 7.dp)) {
+                if (item != null) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (item.isPinned) {
+                            Icon(Icons.Default.PushPin, "Pinned", Modifier.size(11.dp), tint = Color(0xFFA89E85))
+                            Spacer(Modifier.width(4.dp))
+                        }
+                        Text(item.displayTitle, fontSize = 13.sp, lineHeight = 17.sp, fontWeight = FontWeight.ExtraBold, color = BrandDark, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                } else {
+                    Text("Tap to pin a file", fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Bold, color = if (today) Color(0xFF6B5510) else Color(0xFFA89E85))
+                }
+                if (hasRunInfo) RunMetaRow(run)
+            }
         }
     }
 }
 
+@Composable
+private fun SlotChip(icon: ImageVector, text: String, bg: Color, fg: Color) {
+    Row(Modifier.clip(CircleShape).background(bg).padding(horizontal = 9.dp, vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, null, Modifier.size(10.dp), tint = fg)
+        Spacer(Modifier.width(4.dp))
+        Text(text, fontSize = 9.sp, lineHeight = 11.sp, letterSpacing = 0.6.sp, fontWeight = FontWeight.ExtraBold, color = fg, maxLines = 1)
+    }
+}
+
+@Composable
+private fun MetaPill(icon: ImageVector, text: String, fg: Color, bg: Color, border: Color, strike: Boolean = false) {
+    val shape = RoundedCornerShape(8.dp)
+    Row(Modifier.clip(shape).background(bg).border(1.dp, border, shape).padding(horizontal = 8.dp, vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, null, Modifier.size(10.dp), tint = fg.copy(alpha = 0.8f))
+        Spacer(Modifier.width(4.dp))
+        Text(text, fontSize = 10.5.sp, lineHeight = 13.sp, fontWeight = FontWeight.Bold, color = fg, maxLines = 1, overflow = TextOverflow.Ellipsis, textDecoration = if (strike) TextDecoration.LineThrough else TextDecoration.None)
+    }
+}
+
+@Composable
+private fun StatusBadge(text: String, icon: ImageVector?, bg: Brush, fg: Color, pulse: Boolean = false) {
+    var on by remember { mutableStateOf(true) }
+    if (pulse) LaunchedEffect(Unit) { while (true) { delay(700L); on = !on } }
+    Row(Modifier.graphicsLayer { alpha = if (pulse && !on) 0.55f else 1f }.clip(CircleShape).background(bg).padding(horizontal = 8.dp, vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (icon != null) {
+            Icon(icon, null, Modifier.size(9.dp), tint = fg)
+            Spacer(Modifier.width(3.dp))
+        }
+        Text(text, fontSize = 8.5.sp, lineHeight = 10.sp, letterSpacing = 0.5.sp, fontWeight = FontWeight.ExtraBold, color = fg, maxLines = 1)
+    }
+}
+
+@Composable
+private fun RunStatusBadge(run: PlannedRun) {
+    when {
+        run.passed -> StatusBadge("PASSED", Icons.Default.Check, SolidColor(Color(0xFFEFE6CC)), Color(0xFF8A6D00))
+        run.live -> StatusBadge("RUNNING", Icons.Default.Bolt, Brush.linearGradient(listOf(Color(0xFFFF9F1A), Color(0xFFE05D00))), Color.White, pulse = true)
+        run.isNext -> StatusBadge("NEXT UP", Icons.Default.SkipNext, Brush.linearGradient(listOf(Color(0xFF22C55E), Color(0xFF15803D))), Color.White)
+        else -> StatusBadge("SCHEDULED", null, SolidColor(Color(0xFFF3F0E6)), Color(0xFF8A7B55))
+    }
+}
+
+/** v12c compact: one row = time pill + profile pill + inline flip-clock (status badge lives in the header). */
+@Composable
+private fun RunMetaRow(run: PlannedRun?) {
+    Spacer(Modifier.height(5.dp))
+    if (run == null) {
+        val shape = RoundedCornerShape(8.dp)
+        Row(Modifier.fillMaxWidth().clip(shape).background(Color(0xFFFFF0F0)).border(1.dp, Color(0xFFFFD6D6), shape).padding(horizontal = 8.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("No run slot left this day (max 3) - rolls to next day", fontSize = 10.sp, lineHeight = 13.sp, fontWeight = FontWeight.Bold, color = Danger, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+        return
+    }
+    val timeTxt = "${run.startLabel} \u2013 ${run.endLabel}"
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        if (run.passed) MetaPill(Icons.Default.Schedule, timeTxt, Color(0xFFA89E85), Color(0xFFF5F2EA), Color(0xFFEAE4D3), strike = true)
+        else MetaPill(Icons.Default.Schedule, timeTxt, Color(0xFF0B6FA0), Color(0xFFEAF6FC), Color(0xFFD3EBF6))
+        MetaPill(Icons.Default.Person, run.profileLabel, Color(0xFF5C5138), Color(0xFFF7F3E8), Color(0xFFEFE6CC))
+    }
+    if (!run.passed && run.startMs > 0L) {
+        Spacer(Modifier.height(4.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            RunCountdown(run.startMs, run.endMs, run.windowEndMs, compact = true, inline = true)
+        }
+    }
+}
+
+/** Countdown look shared by the slot footer band and the compact today-strip timer. */
+private data class CdLook(val state: String, val label: String, val icon: ImageVector, val top: Color, val bottom: Color, val digit: Color, val labelColor: Color, val left: Long, val pulse: Boolean = false)
+private fun cdLook(now: Long, startMs: Long, endMs: Long, windowEndMs: Long): CdLook = when {
+    now < startMs -> {
+        val left = startMs - now
+        if (left <= 15 * 60_000L) CdLook("soon", "UPLOAD IN", Icons.Default.HourglassEmpty, Color(0xFF0F5F3A), Color(0xFF073B24), Color(0xFFB6FFD2), Ok, left)
+        else CdLook("wait", "UPLOAD IN", Icons.Default.HourglassEmpty, Color(0xFF1B2430), Color(0xFF0F151D), Color(0xFF7FE3FF), PlannerInfo, left)
+    }
+    now <= endMs -> CdLook("live", "UPLOADING NOW", Icons.Default.Bolt, Color(0xFFFF8A00), Color(0xFFC85C00), Color(0xFFFFF7E6), Color(0xFFC85C00), endMs - now, pulse = true)
+    now <= windowEndMs -> CdLook("catch", "CATCH-UP CLOSES IN", Icons.Default.Sync, Color(0xFF6B4A00), Color(0xFF3D2A00), Color(0xFFFFD66B), Color(0xFF8A4B00), windowEndMs - now)
+    else -> CdLook("passed", "WINDOW PASSED", Icons.Default.Schedule, Color(0xFFD9D3C2), Color(0xFFC4BDA9), Color(0xFF6F6650), PlannerMuted, 0L)
+}
+
+@Composable
+private fun FlipBlocks(look: CdLook, blink: Boolean, compact: Boolean) {
+    var sec = (look.left / 1000).coerceAtLeast(0)
+    val days = sec / 86400; sec -= days * 86400
+    val hrs = sec / 3600; sec -= hrs * 3600
+    val mins = sec / 60; sec -= mins * 60
+    Row(verticalAlignment = Alignment.Top) {
+        if (days > 0) {
+            FlipBlock(days, "DAYS", look.top, look.bottom, look.digit, compact)
+            FlipSep(look.labelColor, blink, compact)
+        }
+        FlipBlock(hrs, "HRS", look.top, look.bottom, look.digit, compact)
+        FlipSep(look.labelColor, blink, compact)
+        FlipBlock(mins, "MIN", look.top, look.bottom, look.digit, compact)
+        FlipSep(look.labelColor, blink, compact)
+        FlipBlock(sec, "SEC", look.top, look.bottom, look.digit, compact)
+    }
+}
+
+/** v11: flip-clock style countdown (compact variant used in the today strip). */
+@Composable
+private fun RunCountdown(startMs: Long, endMs: Long, windowEndMs: Long, compact: Boolean = false, inline: Boolean = false) {
+    var now by remember { mutableStateOf(RealTime.now()) }
+    LaunchedEffect(startMs) {
+        while (true) { now = RealTime.now(); delay(1000L - (now % 1000L)) }
+    }
+    val look = cdLook(now, startMs, endMs, windowEndMs)
+    val blink = (now / 500) % 2 == 0L
+    if (inline) {
+        if (look.left <= 0L) return
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(look.icon, null, Modifier.size(11.dp), tint = look.labelColor.copy(alpha = if (look.pulse && !blink) 0.35f else 1f))
+            Spacer(Modifier.width(4.dp))
+            FlipBlocks(look, blink, compact = true)
+        }
+        return
+    }
+    Column(horizontalAlignment = if (compact) Alignment.End else Alignment.Start) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(look.icon, null, Modifier.size(if (compact) 10.dp else 11.dp), tint = look.labelColor.copy(alpha = if (look.pulse && !blink) 0.35f else 1f))
+            Spacer(Modifier.width(3.dp))
+            Text(look.label, fontSize = if (compact) 8.sp else 9.sp, fontWeight = FontWeight.Black, letterSpacing = 1.2.sp, color = look.labelColor)
+        }
+        if (look.left > 0L) {
+            Spacer(Modifier.height(2.dp))
+            FlipBlocks(look, blink, compact)
+        }
+    }
+}
+
+@Composable
+private fun FlipBlock(value: Long, unit: String, top: Color, bottom: Color, digit: Color, compact: Boolean) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .widthIn(min = if (compact) 26.dp else 34.dp)
+            .clip(RoundedCornerShape(if (compact) 5.dp else 7.dp))
+            .background(Brush.verticalGradient(listOf(top, bottom)))
+            .padding(horizontal = if (compact) 4.dp else 5.dp, vertical = if (compact) 2.dp else 3.dp)
+    ) {
+        Text("%02d".format(value), fontSize = if (compact) 12.sp else 16.sp, lineHeight = if (compact) 14.sp else 18.sp, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, color = digit, maxLines = 1)
+        Text(unit, fontSize = if (compact) 6.5.sp else 7.5.sp, lineHeight = 9.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 1.sp, color = digit.copy(alpha = 0.7f), maxLines = 1)
+    }
+}
+
+@Composable
+private fun FlipSep(color: Color, blink: Boolean, compact: Boolean) {
+    Text(":", fontSize = if (compact) 12.sp else 16.sp, lineHeight = if (compact) 18.sp else 24.sp, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace,
+        color = color.copy(alpha = if (blink) 1f else 0.25f), modifier = Modifier.padding(horizontal = 2.dp))
+}
+
+private fun fmtCountdown(ms: Long): String {
+    var s = (ms / 1000).coerceAtLeast(0)
+    val d = s / 86400; s -= d * 86400
+    val h = s / 3600; s -= h * 3600
+    val m = s / 60; s -= m * 60
+    val core = "%02d:%02d:%02d".format(h, m, s)
+    return if (d > 0) "${d}d $core" else core
+}
+
 /** Today's exact upload times for every account (the active one is highlighted). */
+@Composable
+private fun ScheduleSettingsCard(vm: MainViewModel, activeKey: String) {
+    val schedules by vm.schedules.collectAsStateWithLifecycle()
+    val sources by vm.scheduleSource.collectAsStateWithLifecycle()
+    val health by vm.gateHealth.collectAsStateWithLifecycle()
+    val tick by RealTime.tick.collectAsStateWithLifecycle()
+    SectionCard(title = "Upload schedule & cron health", subtitle = "3 windows/day per account. Bot reads these from Firebase - set every cron-job.org job to  0,30 * * * *  (Asia/Dhaka)") {
+        Accounts.all.forEach { acc ->
+            val live = schedules[acc.key] ?: RunSchedule.DEFAULT_WINDOWS.getValue(acc.key)
+            var draft by remember(acc.key, live) { mutableStateOf(live) }
+            val dirty = draft != live
+            val err = RunSchedule.validate(draft)
+            val g = health[acc.key]
+            val isActive = acc.key == activeKey
+            Column(
+                Modifier.fillMaxWidth().padding(vertical = 6.dp)
+                    .border(1.dp, if (isActive) BrandYellow else MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.medium)
+                    .background(if (isActive) PlannerCream else MaterialTheme.colorScheme.surface, MaterialTheme.shapes.medium)
+                    .padding(10.dp)
+            ) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(acc.label, fontWeight = FontWeight.ExtraBold, fontSize = 13.sp)
+                    Text(if (sources[acc.key] == "firebase") "saved in Firebase" else "default (yml)", fontSize = 10.sp, color = PlannerMuted)
+                }
+                draft.forEachIndexed { i, h ->
+                    var open by remember { mutableStateOf(false) }
+                    Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Window ${i + 1}", fontSize = 12.sp, color = PlannerMuted, modifier = Modifier.width(70.dp))
+                        Box {
+                            OutlinedButton(onClick = { open = true }, contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp)) {
+                                Text(RunSchedule.hourLabel(h), fontSize = 12.sp)
+                            }
+                            DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                                (0..21).forEach { hh ->
+                                    DropdownMenuItem(text = { Text(RunSchedule.hourLabel(hh), fontSize = 12.sp) }, onClick = {
+                                        draft = draft.toMutableList().also { it[i] = hh }; open = false
+                                    })
+                                }
+                            }
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Text("to " + RunSchedule.hourLabel((h + RunSchedule.WINDOW_HOURS) % 24), fontSize = 11.sp, color = PlannerMuted)
+                    }
+                }
+                if (err != null) Text(err, fontSize = 11.sp, color = Danger, modifier = Modifier.padding(top = 4.dp))
+                Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = { vm.saveSchedule(acc.key, draft.sorted()) }, enabled = dirty && err == null, contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)) {
+                        Text("Save schedule", fontSize = 12.sp)
+                    }
+                    OutlinedButton(onClick = { draft = RunSchedule.DEFAULT_WINDOWS.getValue(acc.key) }, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
+                        Text("Default", fontSize = 12.sp)
+                    }
+                }
+                // cron health (tick keeps "x min ago" fresh)
+                val ago = remember(tick, g) { g?.minutesSincePing }
+                val (pingColor, pingText) = when {
+                    g == null || ago == null -> Danger to "no ping yet - check cron-job.org"
+                    ago <= 45 -> Ok to "$ago min ago (${g.lastPingDhaka ?: ""})"
+                    ago <= 120 -> Warn to "$ago min ago - a ping was missed"
+                    else -> Danger to "${ago / 60} h ago - cron-job.org ping missing!"
+                }
+                Spacer(Modifier.height(6.dp))
+                Row { Text("Cron ping: ", fontSize = 11.sp, color = PlannerMuted); Text(pingText, fontSize = 11.sp, color = pingColor, fontWeight = FontWeight.Bold) }
+                Text("Last decision: ${g?.lastDecision ?: "-"}" + (g?.lastRunDhaka?.let { "  \u00b7  last run $it" } ?: ""), fontSize = 11.sp, color = PlannerMuted)
+                Text("Runs today: " + (g?.runsToday?.takeIf { it.isNotEmpty() }?.joinToString("  \u00b7  ") ?: "none yet"), fontSize = 11.sp, color = PlannerMuted)
+                if (g?.windowsUsed != null && g.windowsUsed != live) {
+                    Text("Bot last used ${g.windowsUsed} - it picks up the new schedule on its next ping.", fontSize = 11.sp, color = Warn)
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun TodayRunStrip(activeKey: String, plan: SchedulePlan) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
@@ -487,6 +737,7 @@ private fun TodayRunStrip(activeKey: String, plan: SchedulePlan) {
                                 textDecoration = if (r.passed && !done) TextDecoration.LineThrough else null,
                             )
                             if (done) { Spacer(Modifier.width(4.dp)); Icon(Icons.Default.CheckCircle, null, Modifier.size(12.dp), tint = Ok) }
+                            if (!done && !r.passed && r.startMs > 0L) { Spacer(Modifier.weight(1f)); RunCountdown(r.startMs, r.endMs, r.windowEndMs, compact = true) }
                         }
                         if (isActive) {
                             Text(
