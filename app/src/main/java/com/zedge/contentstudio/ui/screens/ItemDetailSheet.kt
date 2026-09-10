@@ -139,6 +139,7 @@ import com.zedge.contentstudio.core.Accounts
 import com.zedge.contentstudio.core.ContentTypes
 import com.zedge.contentstudio.core.Fmt
 import com.zedge.contentstudio.core.RealTime
+import com.zedge.contentstudio.core.UploadErrors
 import com.zedge.contentstudio.data.QueueItem
 import com.zedge.contentstudio.ui.MainViewModel
 import com.zedge.contentstudio.ui.components.TypePill
@@ -147,6 +148,7 @@ import com.zedge.contentstudio.ui.theme.BrandAmber
 import com.zedge.contentstudio.ui.theme.BrandDark
 import com.zedge.contentstudio.ui.theme.BrandYellow
 import com.zedge.contentstudio.ui.theme.Ok
+import com.zedge.contentstudio.ui.theme.Warn
 import com.zedge.contentstudio.ui.theme.typeColor
 import kotlinx.coroutines.delay
 
@@ -374,7 +376,17 @@ fun ItemDetailSheet(vm: MainViewModel, item: QueueItem, onDismiss: () -> Unit) {
             MetaBadge(Icons.Default.DateRange, "Added", if (item.createdAt > 0) java.text.SimpleDateFormat("dd MMM yyyy, HH:mm", java.util.Locale.UK).format(java.util.Date(item.createdAt)) else "-", MaterialTheme.colorScheme.onSurfaceVariant)
             if (item.distributedTo != null) { Spacer(Modifier.height(8.dp)); MetaBadge(Icons.Default.Share, "Distributed to", item.distributedTo!!.uppercase(), Ok) }
             if (item.importedFrom != null) { Spacer(Modifier.height(8.dp)); MetaBadge(Icons.Default.FolderOpen, "Imported from", item.importedFrom!!, MaterialTheme.colorScheme.onSurfaceVariant) }
-            if (item.error.isNotBlank()) { Spacer(Modifier.height(8.dp)); MetaBadge(Icons.Default.ErrorOutline, "Error", item.error, MaterialTheme.colorScheme.error, lines = 3) }
+            item.processingSummary?.let { summary ->
+                Spacer(Modifier.height(8.dp))
+                val okProc = item.autoProcess == true && item.processed
+                MetaBadge(if (okProc) Icons.Default.CheckCircle else Icons.Default.ErrorOutline, "Audio processing", summary, if (okProc) Ok else Warn, lines = 4)
+            }
+            if (item.isFailed || item.error.isNotBlank()) {
+                Spacer(Modifier.height(8.dp))
+                MetaBadge(Icons.Default.ErrorOutline, "Why it failed", UploadErrors.explain(item.error), MaterialTheme.colorScheme.error, lines = 4)
+                if (item.error.isNotBlank()) { Spacer(Modifier.height(8.dp)); MetaBadge(Icons.Default.ErrorOutline, "Raw error", item.error, MaterialTheme.colorScheme.error, lines = 6) }
+                if (item.failedAt > 0) { Spacer(Modifier.height(8.dp)); MetaBadge(Icons.Default.DateRange, "Failed at", RealTime.stampOf(item.failedAt) + " (Dhaka)", MaterialTheme.colorScheme.error) }
+            }
 
             // Tags (live preview of the field below)
             Spacer(Modifier.height(14.dp))

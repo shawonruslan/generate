@@ -20,7 +20,10 @@ data class PlannedDay(
     val switchedFrom: String?,
     val slotCount: Int,
     val slots: List<QueueItem?>,
+    /** Predicted run (time + profile) per slot, parallel to `slots`; null = no run left that day. */
+    val runs: List<PlannedRun?> = emptyList(),
 ) {
+    fun runAt(i: Int): PlannedRun? = runs.getOrNull(i)
     val allEmpty: Boolean get() = slots.all { it == null }
     val isWeekend: Boolean get() = date.dayOfWeek.value >= 6
 }
@@ -72,7 +75,7 @@ object SchedulePlanner {
         }
     }
 
-    fun build(items: List<QueueItem>, state: UploadState?): SchedulePlan {
+    fun build(items: List<QueueItem>, state: UploadState?, accountKey: String = "zedge1"): SchedulePlan {
         val queued = items.filter { it.isQueued }.sortedBy { it.createdAt }
         val buckets = LinkedHashMap<String, MutableList<QueueItem>>()
         TYPE_CYCLE.forEach { buckets[it] = ArrayList() }
@@ -153,7 +156,8 @@ object SchedulePlanner {
             )
             dayIdx++
         }
-        return SchedulePlan(rule, days, buckets, pinnedCount, queued.size)
+        val withRuns = try { RunSchedule.annotate(days, state, accountKey, rule.uploadedToday) } catch (_: Exception) { days }
+        return SchedulePlan(rule, withRuns, buckets, pinnedCount, queued.size)
     }
 
     fun typeLabel(t: String): String = ContentTypes.dayUi(t).label

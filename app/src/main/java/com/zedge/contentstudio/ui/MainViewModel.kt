@@ -90,8 +90,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val selectedItem = MutableStateFlow<QueueItem?>(null)
 
     /** Calendar plan, recomputed whenever the queue, upload state, clock or holiday feed changes. */
-    val plan: StateFlow<SchedulePlan> = combine(items, uploadState, RealTime.tick, specialDays.version) { list, state, _, _ ->
-        withContext(Dispatchers.Default) { SchedulePlanner.build(list, state) }
+    val plan: StateFlow<SchedulePlan> = combine(items, uploadState, activeKey, RealTime.tick, specialDays.version) { list, state, key, _, _ ->
+        withContext(Dispatchers.Default) { SchedulePlanner.build(list, state, key) }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, SchedulePlan.EMPTY)
 
     init {
@@ -318,10 +318,47 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun requeueAllFailed() {
+        viewModelScope.launch {
+            val failed = items.value.filter { it.isFailed }
+            if (failed.isEmpty()) { toast("No failed uploads", "info"); return@launch }
+            try { repo.requeueMany(failed.map { it.id }); toast("Re-queued ${failed.size} item(s)", "ok") }
+            catch (e: Exception) { toast("Requeue failed: ${e.message}", "err") }
+        }
+    }
+
+    fun deleteAllFailed() {
+        viewModelScope.launch {
+            val failed = items.value.filter { it.isFailed }
+            if (failed.isEmpty()) { toast("No failed uploads", "info"); return@launch }
+            if (!confirm("Permanently delete all ${failed.size} failed item(s) from ${Accounts.byKey(activeKey.value).label}?\n\nThis removes them from the queue AND deletes their files from R2 storage. This cannot be undone.", "Delete failed uploads", "Delete", destructive = true)) return@launch
+            try { val res = repo.deleteMany(failed); if (selectedItem.value?.isFailed == true) selectedItem.value = null; toast(res.summary("failed item(s)"), if (res.ok) "ok" else "err") }
+            catch (e: Exception) { toast("Delete failed: ${e.message}", "err") }
+        }
+    }
+
+    /** Bulk delete every item matching a search / type filter ("remove all ringtones", etc.). */
+    fun deleteMatching(matching: List<QueueItem>, plural: String, scope: String) {
+        viewModelScope.launch {
+            if (matching.isEmpty()) { toast("Nothing matches the current filter", "info"); return@launch }
+            val account = Accounts.byKey(activeKey.value).label
+            val uploaded = matching.count { it.status == "uploaded" }
+            val note = if (uploaded > 0) "\n\n$uploaded of them are already uploaded to Zedge - they stay on Zedge, only the queue record + R2 file are removed." else ""
+            if (!confirm("Permanently delete ${matching.size} $plural from $account?\n\nQueue rows AND their R2 files will be deleted.\nFilter: $scope$note\n\nThis cannot be undone.", "Delete all $plural", "Delete", destructive = true)) return@launch
+            if (matching.size >= 25 && !confirm("Really delete ${matching.size} items? This is the second confirmation.", "Are you sure?", "Yes, delete", destructive = true)) return@launch
+            try {
+                val ids = matching.map { it.id }
+                val res = repo.deleteMany(matching)
+                if (selectedItem.value?.id in ids) selectedItem.value = null
+                toast(res.summary("$plural from $account"), if (res.ok) "ok" else "err")
+            } catch (e: Exception) { toast("Bulk delete failed: ${e.message}", "err") }
+        }
+    }
+
     fun delete(item: QueueItem) {
         viewModelScope.launch {
-            if (!confirm("Are you sure you want to delete \"${item.name.ifBlank { item.id }}\" from queue?", "Delete file", "Delete", destructive = true)) return@launch
-            try { repo.delete(item); if (selectedItem.value?.id == item.id) selectedItem.value = null; toast("Deleted", "ok") }
+            if (!confirm("Permanently delete \"${item.name.ifBlank { item.id }}\"?\n\nThis removes it from the queue AND deletes its file(s) from R2 storage.", "Delete file", "Delete", destructive = true)) return@launch
+            try { val res = repo.delete(item); if (selectedItem.value?.id == item.id) selectedItem.value = null; toast(res.summary(), if (res.ok) "ok" else "err") }
             catch (e: Exception) { toast("Delete failed: ${e.message}", "err") }
         }
     }

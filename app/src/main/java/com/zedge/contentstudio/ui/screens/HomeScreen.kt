@@ -48,6 +48,7 @@ import com.zedge.contentstudio.core.ContentTypes
 import com.zedge.contentstudio.core.RealTime
 import com.zedge.contentstudio.ui.MainViewModel
 import com.zedge.contentstudio.ui.components.EmptyState
+import com.zedge.contentstudio.ui.components.FailedUploadsSection
 import com.zedge.contentstudio.ui.components.QueueRow
 import com.zedge.contentstudio.ui.components.SectionCard
 import com.zedge.contentstudio.ui.components.StatTile
@@ -66,6 +67,7 @@ fun HomeScreen(vm: MainViewModel, onOpenPage: (Page) -> Unit) {
     val active by vm.activeKey.collectAsStateWithLifecycle()
     val synced by RealTime.synced.collectAsStateWithLifecycle()
     val queued = queueItems.filter { it.isQueued }
+    val failed = queueItems.filter { it.isFailed }
     fun count(t: String) = queued.count { it.dayType == t }
 
     LazyColumn(contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -126,7 +128,16 @@ fun HomeScreen(vm: MainViewModel, onOpenPage: (Page) -> Unit) {
                     StatTile("Charging animations", count("CHARGING_ANIMATION").toString(), Modifier.weight(1f), typeColor("CHARGING_ANIMATION"))
                     StatTile("Pinned", queued.count { it.isPinned }.toString(), Modifier.weight(1f), BrandAmber)
                 }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    StatTile("Failed uploads", failed.size.toString(), Modifier.weight(1f), MaterialTheme.colorScheme.error, hint = if (failed.isNotEmpty()) "Needs attention" else null)
+                    StatTile("Total in queue", queueItems.size.toString(), Modifier.weight(1f), BrandDark)
+                }
             }
+        }
+
+        // Failed uploads (shown only when something went wrong)
+        if (failed.isNotEmpty()) {
+            item { FailedUploadsSection(vm, failed, Accounts.byKey(active).label, hideWhenEmpty = true) }
         }
 
         // Next 7 days

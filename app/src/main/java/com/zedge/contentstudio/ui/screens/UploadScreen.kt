@@ -61,6 +61,8 @@ import com.zedge.contentstudio.core.ContentTypes
 import com.zedge.contentstudio.core.Fmt
 import com.zedge.contentstudio.ui.MainViewModel
 import com.zedge.contentstudio.ui.components.EmptyState
+import com.zedge.contentstudio.ui.components.FailedUploadsSection
+import com.zedge.contentstudio.ui.components.QueueBrowserSection
 import com.zedge.contentstudio.ui.components.QueueCard
 import com.zedge.contentstudio.ui.components.SectionCard
 import com.zedge.contentstudio.ui.theme.BrandDark
@@ -166,6 +168,7 @@ fun UploadScreen(vm: MainViewModel) {
 
     val account = Accounts.byKey(activeKey).label
     val queued = queueItems.filter { it.isQueued }
+    val failed = queueItems.filter { it.isFailed }
 
     LazyColumn(contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         // ------------------------------------------------------------ 1. plain upload
@@ -339,6 +342,12 @@ fun UploadScreen(vm: MainViewModel) {
                 }
             }
         }
+
+        // ------------------------------------------------------------ 5b. search / date filter / bulk delete by type
+        item { QueueBrowserSection(vm, queueItems, account) }
+
+        // ------------------------------------------------------------ 6. failed uploads (with reason)
+        item { FailedUploadsSection(vm, failed, account) }
 
         item { Spacer(Modifier.height(56.dp)) }
     }

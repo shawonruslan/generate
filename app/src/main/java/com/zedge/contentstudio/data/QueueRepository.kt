@@ -17,6 +17,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import org.json.JSONObject
@@ -299,11 +300,96 @@ class QueueRepository(private val context: Context) {
         db(activeKey.value).update("${Accounts.QUEUE_PATH}/${item.id}", patch)
     }
 
-    suspend fun requeue(item: QueueItem) {
-        db(activeKey.value).update("${Accounts.QUEUE_PATH}/${item.id}", Json.obj("status" to "queued", "error" to null))
+    suspend fun requeue(item: QueueItem) = requeueMany(listOf(item.id))
+
+    /** Multi-path update: put failed rows back in the queue and clear the failure fields (same as the dashboard). */
+    suspend fun requeueMany(ids: Collection<String>) {
+        if (ids.isEmpty()) return
+        val patch = JSONObject()
+        for (id in ids) {
+            patch.put("${Accounts.QUEUE_PATH}/$id/status", "queued")
+            patch.put("${Accounts.QUEUE_PATH}/$id/error", JSONObject.NULL)
+            patch.put("${Accounts.QUEUE_PATH}/$id/failedAt", JSONObject.NULL)
+            patch.put("${Accounts.QUEUE_PATH}/$id/processingAt", JSONObject.NULL)
+            patch.put("${Accounts.QUEUE_PATH}/$id/requeuedAt", FirebaseRtdb.serverTimestamp())
+        }
+        db(activeKey.value).update("", patch)
     }
 
-    suspend fun delete(item: QueueItem) = db(activeKey.value).delete("${Accounts.QUEUE_PATH}/${item.id}")
+    /** Outcome of a permanent delete (Firebase rows + R2 files). */
+    data class PurgeResult(val rows: Int, val files: Int, val kept: Int, val failed: Int, val verifyFailed: Boolean) {
+        val ok: Boolean get() = failed == 0 && !verifyFailed
+        fun summary(what: String = "item(s)"): String {
+            val sb = StringBuilder("Deleted $rows $what · $files file(s) removed from R2")
+            if (kept > 0) sb.append(" · $kept shared file(s) kept")
+            if (verifyFailed) sb.append(" · R2 skipped (could not verify other accounts)")
+            if (failed > 0) sb.append(" · $failed R2 delete(s) failed")
+            return sb.toString()
+        }
+    }
+
+    /**
+     * PERMANENT delete: removes the queue rows from Firebase AND their files from R2
+     * (fileUrl / thumbUrl / set slot files). Files still referenced by another row in
+     * this or any other account (e.g. "Copy to Other Accounts") are kept.
+     */
+    suspend fun purge(items: Collection<QueueItem>): PurgeResult {
+        if (items.isEmpty()) return PurgeResult(0, 0, 0, 0, false)
+        val ids = items.map { it.id }.toSet()
+        val candidates = LinkedHashSet<String>()
+        for (it in items) R2Uploader.collectR2Urls(it.raw, candidates)
+
+        // files referenced by rows we keep - across all accounts
+        val inUse = HashSet<String>()
+        var verifyFailed = false
+        if (candidates.isNotEmpty()) {
+            for (key in Accounts.keys) {
+                try {
+                    val q = Json.norm(db(key).get(Accounts.QUEUE_PATH)) as? JSONObject ?: continue
+                    for (id in Json.keys(q)) {
+                        if (key == activeKey.value && id in ids) continue
+                        R2Uploader.collectR2Urls(q.opt(id), inUse)
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.w("QueueRepository", "purge: cannot read $key queue - keeping R2 files (${e.message})")
+                    verifyFailed = true
+                }
+            }
+        }
+
+        // 1) Firebase rows (chunks of 200)
+        for (chunk in ids.chunked(200)) {
+            val patch = JSONObject()
+            for (id in chunk) patch.put("${Accounts.QUEUE_PATH}/$id", JSONObject.NULL)
+            db(activeKey.value).update("", patch)
+        }
+
+        // 2) R2 files nobody else references (6 parallel)
+        val toDelete = if (verifyFailed) emptyList() else candidates.filter { it !in inUse }
+        var files = 0
+        var failed = 0
+        if (toDelete.isNotEmpty()) {
+            val results = kotlinx.coroutines.coroutineScope {
+                val sem = kotlinx.coroutines.sync.Semaphore(6)
+                toDelete.map { url ->
+                    kotlinx.coroutines.async(Dispatchers.IO) {
+                        sem.withPermit {
+                            try { r2.delete(url) } catch (e: Exception) {
+                                android.util.Log.w("QueueRepository", "R2 delete failed: $url (${e.message})"); false
+                            }
+                        }
+                    }
+                }.map { it.await() }
+            }
+            files = results.count { it }
+            failed = results.size - files
+        }
+        return PurgeResult(ids.size, files, candidates.size - toDelete.size, failed, verifyFailed)
+    }
+
+    suspend fun deleteMany(items: Collection<QueueItem>): PurgeResult = purge(items)
+
+    suspend fun delete(item: QueueItem): PurgeResult = purge(listOf(item))
 
     suspend fun pin(itemId: String, dateKey: String?) =
         db(activeKey.value).update("${Accounts.QUEUE_PATH}/$itemId", Json.obj("scheduledDate" to dateKey))

@@ -140,6 +140,9 @@ object RealTime {
     private val stampFmt = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm", Locale.UK)
     /** "06/09/2026 17:59" - same as the dashboard's en-GB stamp for generated set names. */
     fun stamp(): String = LocalDateTime.now().format(stampFmt)
+    private val failedFmt = DateTimeFormatter.ofPattern("dd MMM yyyy, HH:mm", Locale.UK)
+    /** Epoch millis -> "08 Sept 2026, 00:34" in Dhaka time. */
+    fun stampOf(ms: Long): String = if (ms <= 0L) "-" else Instant.ofEpochMilli(ms).atZone(DHAKA).toLocalDateTime().format(failedFmt)
 
     private val prettyFmt = DateTimeFormatter.ofPattern("EEE, dd MMM yyyy", Locale.UK)
     fun prettyKey(key: String?): String = parseKey(key)?.format(prettyFmt) ?: (key ?: "-")
@@ -210,4 +213,33 @@ object Json {
 
     fun asStringList(a: JSONArray?): List<String> =
         if (a == null) emptyList() else (0 until a.length()).map { a.optString(it) }
+}
+
+/** Turns the bot's raw Playwright / runtime error text into a short, human-readable hint. */
+object UploadErrors {
+    fun explain(raw: String?): String {
+        val e = raw?.trim().orEmpty()
+        val l = e.lowercase()
+        if (e.isEmpty()) return "No error message was recorded for this item."
+        if (l.contains("profile-list")) {
+            val idx = Regex("""\.nth\((\d+)\)""").find(e)?.groupValues?.getOrNull(1)?.toIntOrNull()
+            return if (idx != null)
+                "Profile #${idx + 1} does not exist on this Zedge account. The workflow was run with a higher \"total_profiles\" than the account really has - re-run it with the correct profile count."
+            else "Could not find the profile card on the Zedge Profiles page. Make sure the account has an approved profile and \"total_profiles\" matches."
+        }
+        if (l.contains("stale processing claim")) return "The bot crashed repeatedly while processing this item (stale claim). Requeue to try again."
+        if (l.contains("from r2") && (l.contains("download") || l.contains("http 404"))) return "Source file is missing in R2 storage - probably deleted after another account uploaded it (shared copy). Upload the file again."
+        if (l.contains("missing both fileurl")) return "This queue entry has no file attached. Delete it and upload the file again."
+        if (l.contains("login") || l.contains("sign in") || l.contains("password") || l.contains("credential")) return "Zedge login failed - check the email / password inputs of the workflow."
+        if (l.contains("captcha") || l.contains("verify you are human")) return "Zedge showed a captcha / bot check. Try later or with another proxy / user-agent."
+        if (l.contains("daily limit") || l.contains("limit reached")) return "Zedge daily upload limit reached for this account. It will work again tomorrow."
+        if (l.contains("proxy") || l.contains("err_tunnel") || l.contains("econnrefused") || l.contains("net::err")) return "Network / proxy problem while reaching Zedge. Check proxy settings and re-run."
+        if (l.contains("file too large") || l.contains("exceeds") || l.contains("too big")) return "Zedge rejected the file size. Compress the file and upload again."
+        if (l.contains("unsupported") || l.contains("invalid file") || l.contains("format")) return "Zedge rejected the file format. Check the file type for this content type."
+        if (l.contains("waiting for locator") || l.contains("waitfor") || l.contains("timeout")) {
+            val loc = Regex("""locator\(([^)]*)\)""").find(e)?.groupValues?.getOrNull(1)?.take(80)
+            return "Timed out waiting for a page element" + (if (loc != null) " ($loc)" else "") + ". Zedge may have changed its layout or loaded slowly - requeue and try again."
+        }
+        return "Upload failed with a technical error - see the raw message below. Requeue to retry."
+    }
 }

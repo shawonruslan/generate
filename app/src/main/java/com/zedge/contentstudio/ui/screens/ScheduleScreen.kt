@@ -43,6 +43,15 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.ui.text.style.TextDecoration
+import com.zedge.contentstudio.core.Accounts
+import com.zedge.contentstudio.domain.PlannedRun
+import com.zedge.contentstudio.domain.RunSchedule
+import com.zedge.contentstudio.domain.SchedulePlan
+import com.zedge.contentstudio.ui.theme.Danger
 import androidx.compose.material.icons.filled.Today
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DatePicker
@@ -101,6 +110,7 @@ private val PlannerCream = Color(0xFFFFF3C4)
 private val PlannerMuted = Color(0xFF8A7B55)
 private val PlannerOk = Color(0xFF1F8A4C)
 private val PlannerWarn = Color(0xFF9A6B00)
+private val PlannerInfo = Color(0xFF0B7FB5)
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -126,6 +136,11 @@ fun ScheduleScreen(vm: MainViewModel) {
             StatTile("Left today", "${plan.rule.remaining}", Modifier.weight(1f), BrandAmber, hint = ContentTypes.dayUi(plan.rule.type).label)
             StatTile("Uploaded today", "${plan.rule.uploadedToday} / ${ContentTypes.DAILY_LIMIT}", Modifier.weight(1f), Ok, hint = if (synced) "Live time" else "Device clock")
         }
+        Spacer(Modifier.height(12.dp))
+
+        // Exact run times today - all four accounts (pure math, mirrors the workflow gate hash)
+        val activeKey by vm.activeKey.collectAsStateWithLifecycle()
+        TodayRunStrip(activeKey, plan)
         Spacer(Modifier.height(12.dp))
 
         // Stock per type - one horizontal strip of equal-size tiles, all text left-aligned
@@ -353,9 +368,11 @@ fun DayCard(d: PlannedDay, specialDays: SpecialDays, modifier: Modifier = Modifi
             } else {
                 d.slots.forEachIndexed { i, it ->
                     if (i > 0) Spacer(Modifier.height(8.dp))
+                    val run = d.runAt(i)
+                    val hasRunInfo = d.runs.isNotEmpty()
                     if (it == null) {
                         Row(
-                            Modifier.fillMaxWidth().height(52.dp).clip(RoundedCornerShape(14.dp))
+                            Modifier.fillMaxWidth().heightIn(min = 52.dp).clip(RoundedCornerShape(14.dp))
                                 .background(BrandDark.copy(alpha = if (today) 0.06f else 0.035f))
                                 .border(1.5.dp, BrandDark.copy(alpha = 0.18f), RoundedCornerShape(14.dp))
                                 .clickable(onClick = onEmpty).padding(horizontal = 10.dp),
@@ -366,6 +383,7 @@ fun DayCard(d: PlannedDay, specialDays: SpecialDays, modifier: Modifier = Modifi
                             Column {
                                 Text("EMPTY SLOT", fontSize = 9.5.sp, lineHeight = 11.sp, letterSpacing = 0.8.sp, fontWeight = FontWeight.Bold, color = muted)
                                 Text("Tap to pin a file", style = MaterialTheme.typography.bodySmall, color = ink)
+                                if (hasRunInfo) RunMetaLine(run, muted)
                             }
                         }
                     } else {
@@ -386,6 +404,7 @@ fun DayCard(d: PlannedDay, specialDays: SpecialDays, modifier: Modifier = Modifi
                                 Column(Modifier.weight(1f)) {
                                     Text(ContentTypes.dayUi(it.dayType).short.uppercase(), fontSize = 9.5.sp, lineHeight = 11.sp, letterSpacing = 0.8.sp, fontWeight = FontWeight.Bold, color = muted)
                                     Text(it.displayTitle, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                    if (hasRunInfo) RunMetaLine(run, muted)
                                 }
                                 if (it.isPinned) {
                                     Spacer(Modifier.width(6.dp))
@@ -393,6 +412,94 @@ fun DayCard(d: PlannedDay, specialDays: SpecialDays, modifier: Modifier = Modifi
                                 }
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** "6:30 PM - 6:44 PM  |  Profile #2  |  NEXT" line under a calendar slot. */
+@Composable
+private fun RunMetaLine(run: PlannedRun?, muted: Color) {
+    Spacer(Modifier.height(3.dp))
+    if (run == null) {
+        Text("No run slot left this day (max 3) - rolls to next day", style = MaterialTheme.typography.labelSmall, color = Danger, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        return
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(Icons.Default.Schedule, null, Modifier.size(12.dp), tint = if (run.passed) muted else PlannerInfo)
+        Spacer(Modifier.width(3.dp))
+        Text("${run.startLabel} - ${run.endLabel}", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = if (run.passed) muted else PlannerInfo)
+        Spacer(Modifier.width(8.dp))
+        Icon(Icons.Default.Person, null, Modifier.size(12.dp), tint = muted)
+        Spacer(Modifier.width(2.dp))
+        Text(run.profileLabel, style = MaterialTheme.typography.labelSmall, color = muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (run.passed) {
+            Spacer(Modifier.width(6.dp))
+            Text("window passed", style = MaterialTheme.typography.labelSmall, color = Warn)
+        } else if (run.isNext) {
+            Spacer(Modifier.width(6.dp))
+            Text(if (run.live) "RUNNING NOW" else "NEXT", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.ExtraBold, color = Color.White,
+                modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(Ok).padding(horizontal = 6.dp, vertical = 1.dp))
+        }
+    }
+}
+
+/** Today's exact upload times for every account (the active one is highlighted). */
+@Composable
+private fun TodayRunStrip(activeKey: String, plan: SchedulePlan) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("TODAY'S UPLOAD TIMES", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, letterSpacing = 1.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+            Text("slot + 0-14 min delay", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Accounts.all.forEach { acc ->
+                val isActive = acc.key == activeKey
+                val runs = RunSchedule.todayRuns(acc.key)
+                Column(
+                    Modifier.width(150.dp).clip(RoundedCornerShape(14.dp))
+                        .background(if (isActive) BrandYellow.copy(alpha = 0.25f) else MaterialTheme.colorScheme.surfaceContainerHigh)
+                        .border(1.dp, if (isActive) BrandYellow else MaterialTheme.colorScheme.outline.copy(alpha = 0.4f), RoundedCornerShape(14.dp))
+                        .padding(10.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(acc.label, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
+                        if (isActive) Text("active", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    runs.forEachIndexed { i, r ->
+                        // For the active account we also know the file + profile from the plan
+                        val slotIdx = i - plan.rule.uploadedToday
+                        val todayDay = plan.days.firstOrNull { it.isToday }
+                        val item = if (isActive && slotIdx >= 0) todayDay?.slots?.getOrNull(slotIdx) else null
+                        val pr = if (isActive && slotIdx >= 0) todayDay?.runAt(slotIdx) else null
+                        val done = isActive && i < plan.rule.uploadedToday
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("${i + 1}.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                RunSchedule.clock(r.start),
+                                style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold,
+                                color = when { done -> Ok; r.passed -> MaterialTheme.colorScheme.onSurfaceVariant; r.live -> Ok; else -> PlannerInfo },
+                                textDecoration = if (r.passed && !done) TextDecoration.LineThrough else null,
+                            )
+                            if (done) { Spacer(Modifier.width(4.dp)); Icon(Icons.Default.CheckCircle, null, Modifier.size(12.dp), tint = Ok) }
+                        }
+                        if (isActive) {
+                            Text(
+                                when {
+                                    done -> "uploaded"
+                                    item != null -> "${item.displayTitle} · ${pr?.profileLabel ?: ""}"
+                                    pr != null -> "empty slot · ${pr.profileLabel}"
+                                    else -> "-"
+                                },
+                                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        if (i < runs.lastIndex) Spacer(Modifier.height(4.dp))
                     }
                 }
             }

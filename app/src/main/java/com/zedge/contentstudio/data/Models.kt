@@ -19,6 +19,47 @@ class QueueItem(val id: String, val raw: JSONObject) {
     val fileUrl: String get() = raw.optString("fileUrl", "")
     val thumbUrl: String get() = raw.optString("thumbUrl", "")
     val error: String get() = raw.optString("error", "")
+    val failedAt: Long get() = raw.optLong("failedAt", 0L)
+
+    /** Best-effort "added" time: createdAt, else the timestamp encoded in the Firebase push id. */
+    val addedAtMs: Long get() = if (createdAt > 0L) createdAt else pushIdToMs(id)
+
+    // Ringtone generator audio-processing audit trail (null when the row was not created by the generator)
+    val autoProcess: Boolean? get() = if (raw.has("autoProcess") && !raw.isNull("autoProcess")) raw.optBoolean("autoProcess") else null
+    val processed: Boolean get() = raw.optBoolean("processed", false)
+    val processError: String get() = raw.optString("processError", "")
+    val processing: JSONObject? get() = raw.optJSONObject("processing")
+    /** One-line human summary of the processing result, or null when not applicable. */
+    val processingSummary: String?
+        get() {
+            val ap = autoProcess ?: return null
+            if (!ap) return "Auto-process was OFF - uploaded as generated"
+            if (!processed) return "RAW audio - silence trim / volume boost FAILED: " + processError.ifBlank { "ffmpeg error" }
+            val p = processing ?: return "Processed (silence trim + volume boost)"
+            fun n(k: String): String {
+                if (!p.has(k) || p.isNull(k)) return "-"
+                val d = p.optDouble(k)
+                return if (d == d.toLong().toDouble()) d.toLong().toString() else String.format(java.util.Locale.US, "%.2f", d)
+            }
+            return "${n("durationBefore")}s -> ${n("durationAfter")}s (trimmed ${n("trimmedSec")}s) | peak ${n("peakBeforeDb")} -> ${n("peakAfterDb")} dB | gain +${n("gainDb")} dB (boost ${n("boostPct")}%)"
+        }
+
+    companion object {
+        private const val PUSH_CHARS = "-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz"
+        /** Firebase push ids encode their creation time (ms) in the first 8 characters. */
+        fun pushIdToMs(id: String): Long {
+            if (id.length < 8) return 0L
+            var ts = 0L
+            for (i in 0 until 8) {
+                val idx = PUSH_CHARS.indexOf(id[i])
+                if (idx < 0) return 0L
+                ts = ts * 64 + idx
+            }
+            return ts
+        }
+    }
+    /** Bot marks rows `failed` (upload error) or `error` (migration / invalid file). */
+    val isFailed: Boolean get() = status == "failed" || status == "error"
     val distributedTo: String? get() = raw.optString("distributedTo", "").ifBlank { null }
     val importedFrom: String? get() = raw.optString("importedFrom", "").ifBlank { null }
     val scheduledDate: String? get() = Json.norm(raw.opt("scheduledDate"))?.toString()?.ifBlank { null }
@@ -76,15 +117,29 @@ data class UploadState(
     val lastUploadDate: String?,
     val totalUploadsToday: Int,
     val dayTypeLockedDate: String?,
+    /** Profile rotation state written by the workflow (see getProfileState / updateProfileStateAfterUpload). */
+    val lastUsedProfileIndex: Int = -1,
+    val totalProfilesAvailable: Int = 3,
+    val profileUploadCounts: Map<Int, Int> = emptyMap(),
 ) {
     companion object {
         fun from(data: Any?): UploadState? {
             val o = data as? JSONObject ?: return null
+            val counts = HashMap<Int, Int>()
+            val pc = o.opt("profileUploadCounts")
+            if (pc is JSONObject) {
+                for (k in pc.keys()) k.toIntOrNull()?.let { counts[it] = pc.optInt(k, 0) }
+            } else if (pc is org.json.JSONArray) {
+                for (i in 0 until pc.length()) counts[i] = pc.optInt(i, 0)
+            }
             return UploadState(
                 uploadDayType = o.optString("uploadDayType", "").ifBlank { null },
                 lastUploadDate = o.optString("lastUploadDate", "").ifBlank { null },
                 totalUploadsToday = o.optInt("totalUploadsToday", 0),
                 dayTypeLockedDate = o.optString("dayTypeLockedDate", "").ifBlank { null },
+                lastUsedProfileIndex = o.optInt("lastUsedProfileIndex", -1),
+                totalProfilesAvailable = maxOf(1, o.optInt("totalProfilesAvailable", 3)),
+                profileUploadCounts = counts,
             )
         }
     }

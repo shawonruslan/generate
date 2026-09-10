@@ -13,6 +13,7 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.exifinterface.media.ExifInterface
 import com.zedge.contentstudio.core.Accounts
+import com.zedge.contentstudio.core.Json
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -86,6 +87,38 @@ class R2Uploader(private val http: OkHttpClient) {
             val url = try { JSONObject(body).optString("url") } catch (_: Exception) { "" }
             if (url.isBlank()) throw IOException("R2 returned no url for $name")
             url
+        }
+    }
+
+    /** DELETE <worker> with X-File-Name = object key (same protocol as the upload bots). 404 counts as deleted. */
+    suspend fun delete(fileUrl: String): Boolean = withContext(Dispatchers.IO) {
+        val key = keyFromUrl(fileUrl) ?: return@withContext false
+        val req = Request.Builder().url(Accounts.R2_WORKER_URL).header("X-File-Name", key).delete().build()
+        http.newCall(req).execute().use { resp ->
+            if (resp.isSuccessful || resp.code == 404) true
+            else throw IOException("R2 delete failed (${resp.code}) for $key")
+        }
+    }
+
+    companion object {
+        /** Object key = URL path without the leading slash (percent-decoded), like the workflow does. */
+        fun keyFromUrl(fileUrl: String): String? = try {
+            java.net.URI(fileUrl).path.trimStart('/').ifBlank { null }
+        } catch (_: Exception) {
+            fileUrl.replaceFirst(Regex("^https?://[^/]+/", RegexOption.IGNORE_CASE), "").ifBlank { null }
+        }
+
+        private val URL_KEYS = setOf("fileUrl", "thumbUrl", "fileUrls", "files")
+
+        /** Collect every http(s) URL stored under fileUrl / thumbUrl / fileUrls / files (set slots) in a queue row. */
+        fun collectR2Urls(node: Any?, out: MutableSet<String>, underKey: Boolean = false) {
+            when (val n = Json.norm(node)) {
+                null -> {}
+                is String -> if (underKey && n.startsWith("http", ignoreCase = true)) out.add(n)
+                is org.json.JSONArray -> for (i in 0 until n.length()) collectR2Urls(n.opt(i), out, underKey)
+                is JSONObject -> for (k in Json.keys(n)) collectR2Urls(n.opt(k), out, underKey || k in URL_KEYS)
+                else -> {}
+            }
         }
     }
 }
