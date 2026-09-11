@@ -90,23 +90,28 @@ class R2Uploader(private val http: OkHttpClient) {
         }
     }
 
-    /** DELETE <worker> with X-File-Name = object key (same protocol as the upload bots). 404 counts as deleted. */
+    /** v19: HTTP 200/404 alone is NOT proof of deletion. Require a verified bucket receipt. */
     suspend fun delete(fileUrl: String): Boolean = withContext(Dispatchers.IO) {
-        val key = keyFromUrl(fileUrl) ?: return@withContext false
-        val req = Request.Builder().url(Accounts.R2_WORKER_URL).header("X-File-Name", key).delete().build()
+        val key = keyFromUrl(fileUrl) ?: throw IOException("Invalid R2 URL; record retained")
+        val payload = JSONObject().put("url", fileUrl).toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+        val req = Request.Builder().url(Accounts.R2_WORKER_URL)
+            .header("X-R2-Delete-Protocol", "r2-delete-v1").header("Cache-Control", "no-store").delete(payload).build()
         http.newCall(req).execute().use { resp ->
-            if (resp.isSuccessful || resp.code == 404) true
-            else throw IOException("R2 delete failed (${resp.code}) for $key")
+            val text = resp.body?.string() ?: ""
+            val receipt = try { JSONObject(text) } catch (_: Exception) { throw IOException("R2 HTTP ${resp.code}: unverified response. Deploy the v19 Worker.") }
+            if (!resp.isSuccessful) throw IOException("R2 HTTP ${resp.code}: ${receipt.optString("error", "Delete failed")}")
+            if (!receipt.optBoolean("ok") || !receipt.optBoolean("absent") || receipt.optString("deleteProtocol") != "r2-delete-v1" || receipt.optString("key") != key || receipt.optString("sourceUrl") != fileUrl)
+                throw IOException("R2 deletion not verified. Deploy the v19 Worker with the correct bucket binding.")
+            true
         }
     }
 
     companion object {
         /** Object key = URL path without the leading slash (percent-decoded), like the workflow does. */
         fun keyFromUrl(fileUrl: String): String? = try {
-            java.net.URI(fileUrl).path.trimStart('/').ifBlank { null }
-        } catch (_: Exception) {
-            fileUrl.replaceFirst(Regex("^https?://[^/]+/", RegexOption.IGNORE_CASE), "").ifBlank { null }
-        }
+            val u = java.net.URI(fileUrl)
+            if (u.scheme?.lowercase() !in setOf("http", "https") || u.host.isNullOrBlank()) null else u.path.trimStart('/').ifBlank { null }
+        } catch (_: Exception) { null }
 
         private val URL_KEYS = setOf("fileUrl", "thumbUrl", "fileUrls", "files")
 

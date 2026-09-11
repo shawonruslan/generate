@@ -64,6 +64,7 @@ import com.zedge.contentstudio.ui.theme.typeColor
 fun HomeScreen(vm: MainViewModel, onOpenPage: (Page) -> Unit) {
     val queueItems by vm.items.collectAsStateWithLifecycle()
     val plan by vm.plan.collectAsStateWithLifecycle()
+    val uploadHealth by vm.gateHealth.collectAsStateWithLifecycle()
     val active by vm.activeKey.collectAsStateWithLifecycle()
     val synced by RealTime.synced.collectAsStateWithLifecycle()
     val queued = queueItems.filter { it.isQueued }
@@ -107,6 +108,9 @@ fun HomeScreen(vm: MainViewModel, onOpenPage: (Page) -> Unit) {
                 }
             }
         }
+
+        // v14 Home upload overview — shared with the Planner.
+        item { TodayRunStrip(active, plan, uploadHealth) }
 
         // Queue by type — 2 per row, full labels
         item {

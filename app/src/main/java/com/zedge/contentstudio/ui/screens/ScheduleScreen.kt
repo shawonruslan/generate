@@ -155,10 +155,12 @@ fun ScheduleScreen(vm: MainViewModel) {
         }
         Spacer(Modifier.height(12.dp))
 
+        // v16 schedule overview first: visible above the calendar.
+        Text("All accounts, queue & schedule settings", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp))
         // Exact run times today - all four accounts (pure math, mirrors the workflow gate hash)
         val activeKey by vm.activeKey.collectAsStateWithLifecycle()
         val stripHealth by vm.gateHealth.collectAsStateWithLifecycle()   // v13 cross-account
-        TodayRunStrip(activeKey, plan, stripHealth)
+        TodayRunStrip(activeKey, plan, stripHealth, Modifier.padding(horizontal = 16.dp))
         Spacer(Modifier.height(12.dp))
 
         // v9: edit upload windows (saved to Firebase, read by the bot) + cron health
@@ -205,6 +207,10 @@ fun ScheduleScreen(vm: MainViewModel) {
         }
         Spacer(Modifier.height(14.dp))
 
+
+
+        Text("Schedule calendar", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 16.dp))
+        Text("Dhaka time · Estimated slots · Swipe to change day", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
         if (days.isEmpty()) {
             EmptyState("No planned days yet. Upload files to build the schedule.", Modifier.padding(horizontal = 16.dp))
         } else {
@@ -235,11 +241,17 @@ fun ScheduleScreen(vm: MainViewModel) {
             Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(cur?.let { RealTime.longKey(it.dateKey) } ?: "", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 val todayIdx = days.indexOfFirst { it.isToday }
-                if (todayIdx >= 0 && todayIdx != pager.currentPage) TextButton(onClick = { scope.launch { pager.animateScrollToPage(todayIdx) } }, contentPadding = PaddingValues(horizontal = 10.dp)) {
+                if (todayIdx >= 0) TextButton(onClick = { scope.launch { pager.animateScrollToPage(todayIdx) } }, contentPadding = PaddingValues(horizontal = 10.dp)) {
                     Icon(Icons.Default.Today, null, Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text("Today")
                 }
             }
             Spacer(Modifier.height(6.dp))
+
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp).shadow(3.dp, RoundedCornerShape(14.dp)).clip(RoundedCornerShape(14.dp)).background(BrandYellow.copy(alpha = 0.14f)).border(1.dp, BrandYellow.copy(alpha = 0.35f), RoundedCornerShape(14.dp)).padding(horizontal = 4.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                TextButton(enabled = pager.currentPage > 0, onClick = { scope.launch { pager.animateScrollToPage((pager.currentPage - 1).coerceAtLeast(0)) } }) { Text("← Previous") }
+                Text("${pager.currentPage + 1} / ${days.size} days", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                TextButton(enabled = pager.currentPage < days.lastIndex, onClick = { scope.launch { pager.animateScrollToPage((pager.currentPage + 1).coerceAtMost(days.lastIndex)) } }) { Text("Next →") }
+            }
 
             // Card pager - swipe between days, neighbours peek at the edges
             HorizontalPager(
@@ -247,13 +259,13 @@ fun ScheduleScreen(vm: MainViewModel) {
                 contentPadding = PaddingValues(horizontal = 22.dp),
                 pageSpacing = 12.dp,
                 verticalAlignment = Alignment.Top,
-                modifier = Modifier.fillMaxWidth().height(384.dp),
+                modifier = Modifier.fillMaxWidth(),   // v13b slot height: no fixed 384.dp clip
             ) { i ->
                 val d = days[i]
-                // Every card shares one fixed height; the non-focused neighbours shrink and fade a little
+                // v13b slot height: cards size to their own content, so all 3 slots are always visible
                 val offset = ((pager.currentPage - i) + pager.currentPageOffsetFraction).absoluteValue.coerceIn(0f, 1f)
                 DayCard(d, vm.specialDays,
-                    Modifier.fillMaxSize().graphicsLayer {
+                    Modifier.fillMaxWidth().graphicsLayer {
                         val sc = lerp(0.94f, 1f, 1f - offset)
                         scaleX = sc; scaleY = sc
                         alpha = lerp(0.72f, 1f, 1f - offset)
@@ -317,153 +329,12 @@ fun ScheduleScreen(vm: MainViewModel) {
  * One planner day, styled after the reference design: light card with yellow top edge (today = solid yellow),
  * holiday ribbon with flag + country (tap to cycle when several), date badge, type pill, content box, slot rows.
  */
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-fun DayCard(d: PlannedDay, specialDays: SpecialDays, modifier: Modifier = Modifier, onItem: (QueueItem) -> Unit, onItemLong: (QueueItem) -> Unit, onEmpty: () -> Unit) {
-    val today = d.isToday
-    val special = specialDays.forDate(d.dateKey)
-    val cardBg = if (today) BrandYellow else PlannerCard
-    val ink = BrandDark
-    val muted = if (today) BrandDark.copy(alpha = 0.65f) else PlannerMuted
-    val rowBg = if (today) Color.White.copy(alpha = 0.55f) else PlannerCream
-    val hasType = d.dayType.isNotBlank()
-    val filled = d.slots.count { it != null }
-
-    val cardShape = RoundedCornerShape(22.dp)
-    Column(
-        modifier
-            .shadow(elevation = 18.dp, shape = cardShape, ambientColor = BrandYellow.copy(alpha = 0.35f), spotColor = Color.Black.copy(alpha = 0.6f))
-            .clip(cardShape)
-            .background(Brush.verticalGradient(listOf(cardBg, if (today) BrandAmber.copy(alpha = 0.9f).compositeOver(BrandYellow) else Color(0xFFFFF6DA))))
-            .border(1.dp, Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.9f), Color.White.copy(alpha = 0.15f))), cardShape)
-    ) {
-        // ---- Holiday ribbon / top edge
-        if (special.isNotEmpty()) {
-            HolidayBanner(special, Modifier.fillMaxWidth())
-        } else {
-            Box(Modifier.fillMaxWidth().height(6.dp).background(if (today) BrandAmber else BrandYellow))
-        }
-
-        Column(Modifier.padding(14.dp)) {
-            // ---- Header: date badge + weekday + type pill
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(44.dp).shadow(6.dp, RoundedCornerShape(13.dp), spotColor = BrandDark.copy(alpha = 0.45f)).clip(RoundedCornerShape(13.dp)).background(Brush.verticalGradient(listOf(if (today) Color(0xFF3A3320) else Color(0xFFFFE566), if (today) BrandDark else BrandAmber))), contentAlignment = Alignment.Center) {
-                    Text(d.date.dayOfMonth.toString(), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.ExtraBold, color = if (today) BrandYellow else BrandDark)
-                }
-                Spacer(Modifier.width(10.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(if (today) "TODAY" else d.date.dayOfWeek.name.take(3), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, letterSpacing = 0.8.sp, color = if (!today && d.isWeekend) MaterialTheme.colorScheme.error else ink)
-                    Text(d.date.month.name.take(3), style = MaterialTheme.typography.labelSmall, letterSpacing = 0.8.sp, color = muted)
-                }
-                if (hasType) TypePill(d.dayType)
-                else Text("$filled/${d.slotCount}", style = MaterialTheme.typography.labelMedium, color = muted)
-            }
-            Spacer(Modifier.height(12.dp))
-
-            // ---- Content box
-            Column(
-                Modifier.fillMaxWidth()
-                    .shadow(6.dp, RoundedCornerShape(14.dp), spotColor = BrandDark.copy(alpha = 0.35f))
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(Brush.verticalGradient(listOf(Color.White.copy(alpha = if (today) 0.75f else 1f), rowBg)))
-                    .border(1.dp, if (today) BrandDark.copy(alpha = 0.14f) else BrandYellow.copy(alpha = 0.6f), RoundedCornerShape(14.dp))
-                    .padding(horizontal = 12.dp, vertical = 9.dp)
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(if (today) "TODAY'S CONTENT" else "CONTENT", fontSize = 9.5.sp, lineHeight = 11.sp, letterSpacing = 1.sp, fontWeight = FontWeight.Bold, color = muted, modifier = Modifier.weight(1f))
-                    Text("$filled/${d.slotCount}", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = if (d.slotCount > 0 && filled >= d.slotCount) PlannerOk else muted)
-                }
-                Text(if (hasType) ContentTypes.dayUi(d.dayType).label else "No type has ${ContentTypes.MIN_STOCK_FOR_DAY}+ files", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                if (d.switchedFrom != null) {
-                    Text("${ContentTypes.dayUi(d.switchedFrom).short} skipped (< ${ContentTypes.MIN_STOCK_FOR_DAY} files)", style = MaterialTheme.typography.labelSmall, color = PlannerWarn, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-            }
-            Spacer(Modifier.height(10.dp))
-
-            // ---- Slots
-            if (d.slotCount == 0) {
-                Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(PlannerOk.copy(alpha = if (today) 0.18f else 0.12f)).padding(horizontal = 12.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.CheckCircle, null, Modifier.size(18.dp), tint = PlannerOk)
-                    Spacer(Modifier.width(8.dp))
-                    Text("All uploads done for this day", color = PlannerOk, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
-                }
-            } else {
-                d.slots.forEachIndexed { i, it ->
-                    if (i > 0) Spacer(Modifier.height(10.dp))
-                    SlotCard(index = i, item = it, run = d.runAt(i), hasRunInfo = d.runs.isNotEmpty(), today = today, onItem = onItem, onItemLong = onItemLong, onEmpty = onEmpty)
-                }
-            }
-        }
-    }
-}
-
 // ---------------- v12: professional slot cards (same design as the web panel) ----------------
 private data class SlotTone(val c1: Color, val c2: Color, val soft: Color, val ink: Color)
 private fun slotTone(type: String?): SlotTone = when (if (type == "RINGTONE") "AUDIO" else type) {
     "AUDIO" -> SlotTone(Color(0xFFFF9F1A), Color(0xFFE05D00), Color(0xFFFFF1E0), Color(0xFFB4520A))
     "WALLPAPER" -> SlotTone(Color(0xFFFFE14D), Color(0xFFF2B400), Color(0xFFFFF8D6), Color(0xFF8A6A00))
     else -> SlotTone(Color(0xFFFFCF5C), Color(0xFFC98A00), Color(0xFFFFF3C4), Color(0xFF7A5A00))
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun SlotCard(index: Int, item: QueueItem?, run: PlannedRun?, hasRunInfo: Boolean, today: Boolean, onItem: (QueueItem) -> Unit, onItemLong: (QueueItem) -> Unit, onEmpty: () -> Unit) {
-    val shape = RoundedCornerShape(14.dp)
-    val passed = hasRunInfo && run?.passed == true
-    val live = hasRunInfo && run?.live == true
-    val isNext = hasRunInfo && run?.isNext == true && !live
-    val ringColor = when {
-        live -> Color(0xFFFF8A00)
-        isNext -> Color(0xFF22C55E)
-        item == null -> if (today) BrandDark.copy(alpha = 0.35f) else Color(0xFFE3D9BF)
-        else -> if (today) BrandDark.copy(alpha = 0.14f) else Color(0xFFEFE6CC)
-    }
-    val ringW = if (live || isNext) 2.dp else 1.dp
-    val tone = slotTone(item?.dayType)
-    val cardAlpha = if (passed) 0.72f else 1f
-    val glow = when { live -> Color(0xFFFF8A00); isNext -> Color(0xFF22C55E); else -> BrandDark }
-    val base = Modifier.fillMaxWidth()
-        .graphicsLayer { this.alpha = cardAlpha }
-        .shadow(if (live) 10.dp else 5.dp, shape, spotColor = glow.copy(alpha = 0.45f))
-        .clip(shape)
-        .background(if (item == null) (if (today) Color.White.copy(alpha = 0.28f) else Color(0xFFFFFCF5)) else Color.White)
-        .border(ringW, ringColor, shape)
-    val clickMod = if (item == null) base.clickable(onClick = onEmpty) else base.combinedClickable(onClick = { onItem(item) }, onLongClick = { onItemLong(item) })
-    Row(clickMod.height(IntrinsicSize.Min)) {
-        if (item != null) Box(Modifier.width(4.dp).fillMaxHeight().background(Brush.verticalGradient(listOf(tone.c1, tone.c2))))
-        Column(Modifier.weight(1f)) {
-            // ---- header band: type chip + SLOT n
-            Row(
-                Modifier.fillMaxWidth()
-                    .then(if (item == null) Modifier else Modifier.background(Brush.verticalGradient(listOf(Color(0xFFFFFDF6), Color(0xFFFFF8E6)))))
-                    .padding(start = 10.dp, end = 8.dp, top = 5.dp, bottom = 5.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                if (item == null) SlotChip(Icons.Default.Add, "EMPTY SLOT", Color(0xFFF3F0E6), Color(0xFF8A7B55))
-                else SlotChip(typeIcon(item.dayType), ContentTypes.dayUi(item.dayType).label.uppercase(), tone.soft, tone.ink)
-                Spacer(Modifier.width(6.dp))
-                Text("SLOT ${index + 1}", fontSize = 9.sp, lineHeight = 11.sp, letterSpacing = 0.8.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFFB3A57F))
-                Spacer(Modifier.weight(1f))
-                if (hasRunInfo && run != null) RunStatusBadge(run)   // v12c compact
-            }
-            Box(Modifier.fillMaxWidth().height(1.dp).background(if (item == null) Color(0xFFEAE2CA) else Color(0xFFF4ECD6)))
-            // ---- body
-            Column(Modifier.fillMaxWidth().padding(start = 10.dp, end = 8.dp, top = 6.dp, bottom = 7.dp)) {
-                if (item != null) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (item.isPinned) {
-                            Icon(Icons.Default.PushPin, "Pinned", Modifier.size(11.dp), tint = Color(0xFFA89E85))
-                            Spacer(Modifier.width(4.dp))
-                        }
-                        Text(item.displayTitle, fontSize = 13.sp, lineHeight = 17.sp, fontWeight = FontWeight.ExtraBold, color = BrandDark, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                } else {
-                    Text("Tap to pin a file", fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Bold, color = if (today) Color(0xFF6B5510) else Color(0xFFA89E85))
-                }
-                if (hasRunInfo) RunMetaRow(run)
-            }
-        }
-    }
 }
 
 @Composable
@@ -724,70 +595,6 @@ private fun HealthLine(label: String, value: String, valueColor: Color, labelCol
         Spacer(Modifier.width(6.dp))
         Text("$label: ", fontSize = 11.sp, lineHeight = 14.sp, color = labelColor)
         Text(value, fontSize = 11.sp, lineHeight = 14.sp, color = valueColor, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-    }
-}
-
-@Composable
-private fun TodayRunStrip(activeKey: String, plan: SchedulePlan, health: Map<String, GateHealth?>) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("TODAY'S UPLOAD TIMES", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, letterSpacing = 1.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
-            Text("slot + 0-14 min delay", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        Spacer(Modifier.height(8.dp))
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Accounts.all.forEach { acc ->
-                val isActive = acc.key == activeKey
-                val runs = RunSchedule.todayRuns(acc.key)
-                val g = health[acc.key]                                  // v13 cross-account
-                val doneWins = g?.runWindows ?: emptySet()
-                Column(
-                    Modifier.width(150.dp).clip(RoundedCornerShape(14.dp))
-                        .background(if (isActive) BrandYellow.copy(alpha = 0.25f) else MaterialTheme.colorScheme.surfaceContainerHigh)
-                        .border(1.dp, if (isActive) BrandYellow else MaterialTheme.colorScheme.outline.copy(alpha = 0.4f), RoundedCornerShape(14.dp))
-                        .padding(10.dp)
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(acc.label, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
-                        if (isActive) Text("active", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    Spacer(Modifier.height(6.dp))
-                    runs.forEachIndexed { i, r ->
-                        // For the active account we also know the file + profile from the plan
-                        val slotIdx = i - plan.rule.uploadedToday
-                        val todayDay = plan.days.firstOrNull { it.isToday }
-                        val item = if (isActive && slotIdx >= 0) todayDay?.slots?.getOrNull(slotIdx) else null
-                        val pr = if (isActive && slotIdx >= 0) todayDay?.runAt(slotIdx) else null
-                        val done = doneWins.contains(i) || (isActive && doneWins.isEmpty() && i < plan.rule.uploadedToday)
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("${i + 1}.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Spacer(Modifier.width(4.dp))
-                            Text(
-                                RunSchedule.clock(r.start),
-                                style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold,
-                                color = when { done -> Ok; r.passed -> MaterialTheme.colorScheme.onSurfaceVariant; r.live -> Ok; else -> PlannerInfo },
-                                textDecoration = if (r.passed && !done) TextDecoration.LineThrough else null,
-                            )
-                            if (done) { Spacer(Modifier.width(4.dp)); Icon(Icons.Default.CheckCircle, null, Modifier.size(12.dp), tint = Ok) }
-                            if (!done && !r.passed && r.startMs > 0L) { Spacer(Modifier.weight(1f)); RunCountdown(r.startMs, r.endMs, r.windowEndMs, compact = true) }
-                        }
-                        if (isActive || done || r.passed) {
-                            Text(
-                                when {
-                                    done -> "uploaded" + (g?.runWindowTimes?.get(i)?.let { " " + it } ?: "")
-                                    !isActive -> if (r.passed) "missed - catch-up next" else "waiting"
-                                    item != null -> "${item.displayTitle} · ${pr?.profileLabel ?: ""}"
-                                    pr != null -> "empty slot · ${pr.profileLabel}"
-                                    else -> "-"
-                                },
-                                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                        if (i < runs.lastIndex) Spacer(Modifier.height(4.dp))
-                    }
-                }
-            }
-        }
     }
 }
 

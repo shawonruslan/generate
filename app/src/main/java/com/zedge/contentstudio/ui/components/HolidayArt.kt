@@ -38,6 +38,10 @@ import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -97,101 +101,59 @@ fun holidayTheme(iconKey: String): HolidayTheme {
     return HolidayTheme(icon, colors, accent)
 }
 
-/**
- * Holiday banner shown on top of a day card. Themed gradient art per topic, watermark icon,
- * glassy sweeping highlight, auto-slides between holidays every few seconds (tap to skip).
- */
+/** v17: calm inline holiday notes. All events remain accessible without auto-rotation. */
+@Suppress("UNUSED_PARAMETER")
 @Composable
 fun HolidayBanner(special: List<SpecialDay>, modifier: Modifier = Modifier, autoSlideMs: Long = 4200L) {
     if (special.isEmpty()) return
-    var idx by remember(special) { mutableIntStateOf(0) }
-    LaunchedEffect(special, idx) {
-        if (special.size > 1) { delay(autoSlideMs); idx = (idx + 1) % special.size }
-    }
-
-    // glass sweep 0..1 across the banner
-    val shimmer = rememberInfiniteTransition(label = "glass")
-    val sweep by shimmer.animateFloat(
-        initialValue = -0.6f, targetValue = 1.6f,
-        animationSpec = infiniteRepeatable(tween(2600, easing = LinearEasing), RepeatMode.Restart), label = "sweep"
-    )
-
-    AnimatedContent(
-        targetState = idx,
-        transitionSpec = {
-            (slideInHorizontally(tween(420)) { it / 2 } + fadeIn(tween(420))) togetherWith
-                (slideOutHorizontally(tween(320)) { -it / 2 } + fadeOut(tween(260)))
-        },
-        label = "holiday",
-        modifier = modifier.clickable(enabled = special.size > 1) { idx = (idx + 1) % special.size },
-    ) { i ->
-        val s = special[i % special.size]
-        val theme = remember(s.icon) { holidayTheme(s.icon) }
-        val countries = s.countries ?: emptyList<String>()
-
-        Box(
-            Modifier.fillMaxWidth().height(62.dp)
-                .background(Brush.linearGradient(theme.colors))
-                .drawWithContent {
-                    drawContent()
-                    // moving glass highlight
-                    val w = size.width
-                    val x = w * sweep
-                    drawRect(
-                        Brush.linearGradient(
-                            listOf(Color.Transparent, Color.White.copy(alpha = 0.22f), Color.Transparent),
-                            start = Offset(x - w * 0.25f, 0f), end = Offset(x + w * 0.25f, size.height)
-                        )
-                    )
-                    // top glass edge
-                    drawRect(Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.18f), Color.Transparent), endY = size.height * 0.55f))
-                }
-        ) {
-            // identity art: big soft watermark icon on the right
-            Icon(theme.icon, null, Modifier.align(Alignment.CenterEnd).padding(end = 26.dp).size(72.dp).rotate(-14f).alpha(0.16f), tint = Color.White)
-            Icon(theme.icon, null, Modifier.align(Alignment.TopEnd).padding(end = 82.dp, top = 4.dp).size(26.dp).rotate(12f).alpha(0.10f), tint = Color.White)
-
-            Row(Modifier.fillMaxSize().padding(start = 12.dp, end = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                // themed icon medallion (+ flag when a country is known)
-                Box(
-                    Modifier.size(38.dp).clip(RoundedCornerShape(12.dp))
-                        .background(Color.White.copy(alpha = 0.16f))
-                        .border(1.dp, Color.White.copy(alpha = 0.35f), RoundedCornerShape(12.dp)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (countries.isNotEmpty()) Text(Country.flag(countries[0]), fontSize = 20.sp, lineHeight = 22.sp)
-                    else Icon(theme.icon, null, Modifier.size(20.dp), tint = theme.accent)
-                }
-                Spacer(Modifier.width(10.dp))
-                Column(Modifier.weight(1f)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (countries.isNotEmpty()) {
-                            Icon(theme.icon, null, Modifier.size(12.dp), tint = theme.accent)
-                            Spacer(Modifier.width(5.dp))
-                        }
-                        Text(s.name.uppercase(), color = theme.accent, fontSize = 11.sp, lineHeight = 13.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 0.6.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                    Text(
-                        if (countries.isEmpty()) "International day"
-                        else countries.take(3).joinToString(", ") { Country.name(it) } + if (countries.size > 3) " +${countries.size - 3} more" else "",
-                        color = Color.White.copy(alpha = 0.8f), style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis
-                    )
-                }
-                if (special.size > 1) {
-                    Spacer(Modifier.width(8.dp))
-                    Column(horizontalAlignment = Alignment.End) {
-                        Box(Modifier.clip(CircleShape).background(Color.White.copy(alpha = 0.18f)).border(1.dp, Color.White.copy(alpha = 0.3f), CircleShape).padding(horizontal = 8.dp, vertical = 3.dp)) {
-                            Text("${(i % special.size) + 1}/${special.size}", color = Color.White, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
-                        }
-                        Spacer(Modifier.height(5.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                            repeat(special.size.coerceAtMost(6)) { d ->
-                                Box(Modifier.size(width = if (d == i % special.size) 12.dp else 5.dp, height = 5.dp).clip(CircleShape).background(Color.White.copy(alpha = if (d == i % special.size) 0.95f else 0.4f)))
-                            }
-                        }
-                    }
+    val items = special.sortedBy { when (it.kind) { "festival" -> 0; "bd" -> 1; "global" -> 2; else -> 3 } }
+    var expanded by remember(special.map { it.slug }) { mutableStateOf(false) }
+    val colors = MaterialTheme.colorScheme
+    val dark = colors.surface.luminance() < 0.5f
+    val shape = RoundedCornerShape(11.dp)
+    Column(modifier.fillMaxWidth().clip(shape)
+        .background(if (dark) Color(0xFF332B17) else Color(0xFFFFFAE3))
+        .border(1.dp, BrandYellow.copy(alpha = if (dark) 0.20f else 0.32f), shape)) {
+        Row(Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, top = 9.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(if (items.size == 1) "HOLIDAY & OBSERVANCE" else "HOLIDAYS & OBSERVANCES", modifier = Modifier.weight(1f), fontSize = 9.sp, lineHeight = 13.sp, letterSpacing = 0.5.sp, fontWeight = FontWeight.Bold, color = colors.onSurfaceVariant)
+            if (items.size > 1) Text("${items.size} events", fontSize = 9.sp, color = colors.onSurfaceVariant)
+        }
+        HolidayNoteRow(items.first())
+        if (expanded) {
+            items.drop(1).forEach { event ->
+                Box(Modifier.fillMaxWidth().height(1.dp).background(BrandYellow.copy(alpha = 0.16f)))
+                HolidayNoteRow(event)
+            }
+        }
+        if (items.size > 1) {
+            Box(Modifier.fillMaxWidth().height(1.dp).background(BrandYellow.copy(alpha = 0.16f)))
+            TextButton(onClick = { expanded = !expanded }, modifier = Modifier.fillMaxWidth(), contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(if (expanded) "Show less" else "View ${items.size - 1} more", modifier = Modifier.weight(1f), fontSize = 11.sp, color = colors.onSurfaceVariant)
+                    Text(if (expanded) "⌃" else "⌄", fontSize = 15.sp, color = colors.onSurfaceVariant)
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun HolidayNoteRow(event: SpecialDay) {
+    val colors = MaterialTheme.colorScheme
+    val countries = event.countries ?: emptyList<String>()
+    val country = if (countries.isNotEmpty()) countries.joinToString(" · ") { Country.name(it) }
+        else if (event.kind == "global") "Worldwide" else "Country not listed"
+    val kind = when (event.kind) { "holiday" -> "Public holiday"; "festival" -> "Festival"; "global" -> "Observance"; else -> "Special day" }
+    Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.Top) {
+        Box(Modifier.size(32.dp).clip(RoundedCornerShape(9.dp)).background(BrandYellow.copy(alpha = 0.13f)).border(1.dp, BrandYellow.copy(alpha = 0.20f), RoundedCornerShape(9.dp)), contentAlignment = Alignment.Center) {
+            if (countries.isNotEmpty()) Text(Country.flag(countries.first()), fontSize = 19.sp, lineHeight = 22.sp)
+            else Icon(holidayTheme(event.icon).icon, null, Modifier.size(16.dp), tint = colors.onSurfaceVariant)
+        }
+        Spacer(Modifier.width(9.dp))
+        Column(Modifier.weight(1f)) {
+            Text(event.name, fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.SemiBold, color = colors.onSurface)
+            Spacer(Modifier.height(3.dp))
+            Text("$country · $kind", fontSize = 10.sp, lineHeight = 15.sp, color = colors.onSurfaceVariant)
         }
     }
 }

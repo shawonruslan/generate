@@ -347,8 +347,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val failed = items.value.filter { it.isFailed }
             if (failed.isEmpty()) { toast("No failed uploads", "info"); return@launch }
             if (!confirm("Permanently delete all ${failed.size} failed item(s) from ${Accounts.byKey(activeKey.value).label}?\n\nThis removes them from the queue AND deletes their files from R2 storage. This cannot be undone.", "Delete failed uploads", "Delete", destructive = true)) return@launch
-            try { val res = repo.deleteMany(failed); if (selectedItem.value?.isFailed == true) selectedItem.value = null; toast(res.summary("failed item(s)"), if (res.ok) "ok" else "err") }
+            try { val res = repo.deleteMany(failed) { text, cur, total -> progress.value = JobProgress("Deleting ${failed.size} failed item(s)", text, cur, total) }; if (selectedItem.value?.id in res.deletedIds) selectedItem.value = null; toast(res.summary("failed item(s)"), if (res.ok) "ok" else "err") }
             catch (e: Exception) { toast("Delete failed: ${e.message}", "err") }
+            finally { progress.value = null }
         }
     }
 
@@ -363,18 +364,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             if (matching.size >= 25 && !confirm("Really delete ${matching.size} items? This is the second confirmation.", "Are you sure?", "Yes, delete", destructive = true)) return@launch
             try {
                 val ids = matching.map { it.id }
-                val res = repo.deleteMany(matching)
-                if (selectedItem.value?.id in ids) selectedItem.value = null
+                val res = repo.deleteMany(matching) { text, cur, total -> progress.value = JobProgress("Deleting ${ids.size} $plural", text, cur, total) }
+                if (selectedItem.value?.id in res.deletedIds) selectedItem.value = null
                 toast(res.summary("$plural from $account"), if (res.ok) "ok" else "err")
             } catch (e: Exception) { toast("Bulk delete failed: ${e.message}", "err") }
+            finally { progress.value = null }
         }
     }
 
     fun delete(item: QueueItem) {
         viewModelScope.launch {
             if (!confirm("Permanently delete \"${item.name.ifBlank { item.id }}\"?\n\nThis removes it from the queue AND deletes its file(s) from R2 storage.", "Delete file", "Delete", destructive = true)) return@launch
-            try { val res = repo.delete(item); if (selectedItem.value?.id == item.id) selectedItem.value = null; toast(res.summary(), if (res.ok) "ok" else "err") }
+            try { val res = repo.delete(item) { text, cur, total -> progress.value = JobProgress("Deleting file", text, cur, total) }; if (selectedItem.value?.id in res.deletedIds) selectedItem.value = null; toast(res.summary(), if (res.ok) "ok" else "err") }
             catch (e: Exception) { toast("Delete failed: ${e.message}", "err") }
+            finally { progress.value = null }
         }
     }
 
