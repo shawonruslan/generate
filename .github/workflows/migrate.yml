@@ -1,36 +1,11 @@
-name: Migrate R2 (old bucket -> new bucket)
+name: Migrate R2 (one click)
 
-# One-time tool. Copies media of NOT-YET-UPLOADED queue items from the old R2
-# (via their public/Worker URLs) into the NEW R2 Worker, verifies, then rewrites
-# the Firebase fileUrl fields. Run with dry_run=true first.
+# One-click: copies media of NOT-YET-UPLOADED queue items (queued/failed/processing/deleting)
+# from the OLD R2 public URL / Worker into the NEW Worker, verifies, rewrites Firebase fileUrls.
+# Safe to re-run: already-migrated records no longer point at the old origins and are skipped.
 
 on:
   workflow_dispatch:
-    inputs:
-      new_worker_url:
-        description: "NEW R2 Worker URL (https://....workers.dev)"
-        required: true
-        type: string
-      old_origins:
-        description: "Old origins whose files must be migrated (comma-separated)"
-        required: true
-        default: "https://white-flower-a665zedge-r2-gateway.shawonbarba1.workers.dev"
-        type: string
-      statuses:
-        description: "Only records with these statuses (comma-separated). 'done' items are never touched."
-        required: true
-        default: "queued,failed,processing,deleting"
-        type: string
-      accounts:
-        description: "Accounts to migrate"
-        required: true
-        default: "zedge1,zedge2,zedge3,zedge4"
-        type: string
-      dry_run:
-        description: "Dry run: only list what would be migrated"
-        required: true
-        default: true
-        type: boolean
 
 jobs:
   migrate:
@@ -43,11 +18,11 @@ jobs:
 
       - name: Migrate
         env:
-          NEW_WORKER_URL: ${{ github.event.inputs.new_worker_url }}
-          OLD_ORIGINS: ${{ github.event.inputs.old_origins }}
-          STATUSES: ${{ github.event.inputs.statuses }}
-          ACCOUNTS: ${{ github.event.inputs.accounts }}
-          DRY_RUN: ${{ github.event.inputs.dry_run }}
+          NEW_WORKER_URL: "https://shimul.shawonhawladar.workers.dev"
+          OLD_ORIGINS: "https://pub-5d9271f8646c4db0a7a2e250e867d9be.r2.dev,https://white-flower-a665zedge-r2-gateway.shawonbarba1.workers.dev"
+          STATUSES: "queued,failed,processing,deleting"
+          ACCOUNTS: "zedge1,zedge2,zedge3,zedge4"
+          DRY_RUN: "false"
         run: |
           cat > migrate.mjs << 'MIGRATE_EOF'
           import fs from 'fs';
