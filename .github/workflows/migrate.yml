@@ -1,8 +1,8 @@
-name: Migrate R2 (one click)
+name: Fix R2 folders (one click)
 
-# One-click: copies media of NOT-YET-UPLOADED queue items (queued/failed/processing/deleting)
-# from the OLD R2 public URL / Worker into the NEW Worker, verifies, rewrites Firebase fileUrls.
-# Safe to re-run: already-migrated records no longer point at the old origins and are skipped.
+# One-click: moves NEW-bucket objects from legacy generator folders zedge_N/... to
+# zedgeN/ringtone/..., verifies, rewrites Firebase URLs, then deletes the old copy.
+# Only touches not-yet-uploaded items. Safe to re-run.
 
 on:
   workflow_dispatch:
@@ -19,12 +19,12 @@ jobs:
       - name: Migrate
         env:
           NEW_WORKER_URL: "https://shimul.shawonhawladar.workers.dev"
-          OLD_ORIGINS: "https://pub-5d9271f8646c4db0a7a2e250e867d9be.r2.dev,https://white-flower-a665zedge-r2-gateway.shawonbarba1.workers.dev"
+          OLD_ORIGINS: "https://shimul.shawonhawladar.workers.dev"
           STATUSES: "queued,failed,processing,deleting"
           ACCOUNTS: "zedge1,zedge2,zedge3,zedge4"
           DRY_RUN: "false"
         run: |
-          cat > migrate.mjs << 'MIGRATE_EOF'
+          cat > reorg.mjs << 'MIGRATE_EOF'
           import fs from 'fs';
 
           // <-- CONFIG: Firebase Realtime Database URLs (same as zedge1-4.yml)
@@ -42,7 +42,6 @@ jobs:
           const ACCOUNTS = String(process.env.ACCOUNTS || '').split(',').map(s => s.trim()).filter(a => DBS[a]);
           const DRY = String(process.env.DRY_RUN) !== 'false';
           if (!/^https:\/\//.test(NEW_WORKER)) { console.error('new_worker_url invalid'); process.exit(1); }
-          if (OLD.includes(new URL(NEW_WORKER).origin)) { console.error('new_worker_url must differ from old origins'); process.exit(1); }
 
           const sleep = ms => new Promise(r => setTimeout(r, ms));
           async function fetchRetry(url, opts = {}, tries = 3) {
@@ -54,7 +53,8 @@ jobs:
             }
             throw last;
           }
-          const isOld = v => typeof v === 'string' && /^https?:\/\//.test(v) && OLD.includes((() => { try { return new URL(v).origin; } catch { return ''; } })());
+          const LEGACY = /^\/zedge_(\d)\/(.+)$/;
+          const isOld = v => { if (typeof v !== 'string' || !/^https?:\/\//.test(v)) return false; try { const u = new URL(v); return OLD.includes(u.origin) && LEGACY.test(u.pathname); } catch { return false; } };
           function collect(obj, prefix, out) {
             if (!obj || typeof obj !== 'object') return;
             for (const [k, v] of Object.entries(obj)) {
@@ -67,7 +67,9 @@ jobs:
           const cache = new Map(); // old url -> new url
           async function migrateFile(oldUrl) {
             if (cache.has(oldUrl)) return cache.get(oldUrl);
-            const key = decodeURIComponent(new URL(oldUrl).pathname.replace(/^\/+/, ''));
+            const m = new URL(oldUrl).pathname.match(LEGACY);
+            const oldKey = decodeURIComponent(m[0].replace(/^\/+/, ''));
+            const key = `zedge${m[1]}/ringtone/${decodeURIComponent(m[2])}`;
             const src = await fetchRetry(oldUrl);
             if (src.status === 404) throw new Error('source missing (404)');
             const buf = Buffer.from(await src.arrayBuffer());
@@ -81,6 +83,8 @@ jobs:
             if (!head.ok) throw new Error(`verify HEAD ${head.status}`);
             const len = Number(head.headers.get('content-length') || 0);
             if (len && len !== buf.length) throw new Error(`size mismatch ${len} != ${buf.length}`);
+            const del = await fetchRetry(NEW_WORKER, { method: 'DELETE', headers: { 'X-File-Name': oldKey } });
+            if (!del.ok) console.log(`    (warn) could not delete old copy ${oldKey}: HTTP ${del.status}`);
             cache.set(oldUrl, newUrl);
             return newUrl;
           }
@@ -119,8 +123,7 @@ jobs:
                 }
               }
               if (!DRY && Object.keys(patch).length) {
-                patch['r2MigratedAt'] = Date.now();
-                patch['r2MigratedFrom'] = OLD.join(',');
+                patch['r2ReorganizedAt'] = Date.now();
                 if (!recOk) patch['r2MigrationPartial'] = true;
                 const pr = await fetchRetry(`${db}/${QUEUE_PATH}/${id}.json`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) });
                 if (!pr.ok) { failures.push(`${acc}/${id}: firebase PATCH HTTP ${pr.status}`); console.log(`    FAIL firebase patch ${pr.status}`); }
@@ -128,7 +131,7 @@ jobs:
             }
           }
           const lines = [
-            `## R2 migration ${DRY ? '(DRY RUN)' : ''}`,
+            `## R2 folder fix ${DRY ? '(DRY RUN)' : ''}`,
             `- Records: ${records}`, `- Files: ${totalFiles}`, DRY ? '' : `- Migrated OK: ${ok}`, DRY ? '' : `- Failed: ${failed}`,
             failures.length ? `\n### Failures\n${failures.map(f => `- ${f}`).join('\n')}` : ''
           ].filter(Boolean);
@@ -136,4 +139,4 @@ jobs:
           if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join('\n') + '\n');
           if (failed) process.exit(1);
           MIGRATE_EOF
-          node migrate.mjs
+          node reorg.mjs
