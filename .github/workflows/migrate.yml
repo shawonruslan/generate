@@ -1,0 +1,164 @@
+name: Migrate R2 (old bucket -> new bucket)
+
+# One-time tool. Copies media of NOT-YET-UPLOADED queue items from the old R2
+# (via their public/Worker URLs) into the NEW R2 Worker, verifies, then rewrites
+# the Firebase fileUrl fields. Run with dry_run=true first.
+
+on:
+  workflow_dispatch:
+    inputs:
+      new_worker_url:
+        description: "NEW R2 Worker URL (https://....workers.dev)"
+        required: true
+        type: string
+      old_origins:
+        description: "Old origins whose files must be migrated (comma-separated)"
+        required: true
+        default: "https://white-flower-a665zedge-r2-gateway.shawonbarba1.workers.dev"
+        type: string
+      statuses:
+        description: "Only records with these statuses (comma-separated). 'done' items are never touched."
+        required: true
+        default: "queued,failed,processing,deleting"
+        type: string
+      accounts:
+        description: "Accounts to migrate"
+        required: true
+        default: "zedge1,zedge2,zedge3,zedge4"
+        type: string
+      dry_run:
+        description: "Dry run: only list what would be migrated"
+        required: true
+        default: true
+        type: boolean
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Migrate
+        env:
+          NEW_WORKER_URL: ${{ github.event.inputs.new_worker_url }}
+          OLD_ORIGINS: ${{ github.event.inputs.old_origins }}
+          STATUSES: ${{ github.event.inputs.statuses }}
+          ACCOUNTS: ${{ github.event.inputs.accounts }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: |
+          cat > migrate.mjs << 'MIGRATE_EOF'
+          import fs from 'fs';
+
+          // <-- CONFIG: Firebase Realtime Database URLs (same as zedge1-4.yml)
+          const DBS = {
+            zedge1: "https://shimul-zedge1-default-rtdb.asia-southeast1.firebasedatabase.app",
+            zedge2: "https://shimul-zedge-2-default-rtdb.asia-southeast1.firebasedatabase.app",
+            zedge3: "https://shimul-zedge3-default-rtdb.firebaseio.com",
+            zedge4: "https://shimul-zedge-4-default-rtdb.firebaseio.com"
+          };
+          const QUEUE_PATH = 'wallpaperQueue';
+
+          const NEW_WORKER = String(process.env.NEW_WORKER_URL || '').trim().replace(/\/+$/, '');
+          const OLD = String(process.env.OLD_ORIGINS || '').split(',').map(s => s.trim().replace(/\/+$/, '')).filter(Boolean).map(s => new URL(s).origin);
+          const STATUSES = new Set(String(process.env.STATUSES || 'queued').split(',').map(s => s.trim()).filter(Boolean));
+          const ACCOUNTS = String(process.env.ACCOUNTS || '').split(',').map(s => s.trim()).filter(a => DBS[a]);
+          const DRY = String(process.env.DRY_RUN) !== 'false';
+          if (!/^https:\/\//.test(NEW_WORKER)) { console.error('new_worker_url invalid'); process.exit(1); }
+          if (OLD.includes(new URL(NEW_WORKER).origin)) { console.error('new_worker_url must differ from old origins'); process.exit(1); }
+
+          const sleep = ms => new Promise(r => setTimeout(r, ms));
+          async function fetchRetry(url, opts = {}, tries = 3) {
+            let last;
+            for (let i = 1; i <= tries; i++) {
+              try { const r = await fetch(url, opts); if (r.ok || r.status === 404) return r; last = new Error(`HTTP ${r.status}`); }
+              catch (e) { last = e; }
+              await sleep(1500 * i);
+            }
+            throw last;
+          }
+          const isOld = v => typeof v === 'string' && /^https?:\/\//.test(v) && OLD.includes((() => { try { return new URL(v).origin; } catch { return ''; } })());
+          function collect(obj, prefix, out) {
+            if (!obj || typeof obj !== 'object') return;
+            for (const [k, v] of Object.entries(obj)) {
+              const p = prefix ? `${prefix}/${k}` : k;
+              if (isOld(v)) out.push({ path: p, url: v });
+              else if (v && typeof v === 'object') collect(v, p, out);
+            }
+          }
+
+          const cache = new Map(); // old url -> new url
+          async function migrateFile(oldUrl) {
+            if (cache.has(oldUrl)) return cache.get(oldUrl);
+            const key = decodeURIComponent(new URL(oldUrl).pathname.replace(/^\/+/, ''));
+            const src = await fetchRetry(oldUrl);
+            if (src.status === 404) throw new Error('source missing (404)');
+            const buf = Buffer.from(await src.arrayBuffer());
+            if (!buf.length) throw new Error('source empty');
+            const type = src.headers.get('content-type') || 'application/octet-stream';
+            const up = await fetchRetry(NEW_WORKER, { method: 'POST', headers: { 'X-File-Name': key, 'X-File-Type': type }, body: buf });
+            if (!up.ok) throw new Error(`upload HTTP ${up.status}`);
+            const j = await up.json().catch(() => ({}));
+            const newUrl = j.url || `${NEW_WORKER}/${key.split('/').map(encodeURIComponent).join('/')}`;
+            const head = await fetchRetry(newUrl, { method: 'HEAD' });
+            if (!head.ok) throw new Error(`verify HEAD ${head.status}`);
+            const len = Number(head.headers.get('content-length') || 0);
+            if (len && len !== buf.length) throw new Error(`size mismatch ${len} != ${buf.length}`);
+            cache.set(oldUrl, newUrl);
+            return newUrl;
+          }
+
+          const summary = [];
+          let totalFiles = 0, totalBytes = 0, ok = 0, failed = 0, records = 0;
+          const failures = [];
+          for (const acc of ACCOUNTS) {
+            const db = DBS[acc];
+            console.log(`\n========== ${acc} ==========`);
+            let data = {};
+            try { const res = await fetchRetry(`${db}/${QUEUE_PATH}.json`); data = (await res.json()) || {}; }
+            catch (e) { failed++; failures.push(`${acc}: cannot read Firebase queue - ${e.message}`); console.log(`  FAIL reading ${db}: ${e.message}`); continue; }
+            for (const [id, rec] of Object.entries(data)) {
+              if (!rec || typeof rec !== 'object') continue;
+              const st = rec.status || 'queued';
+              if (st === 'done' || !STATUSES.has(st)) continue;
+              const refs = [];
+              collect(rec, '', refs);
+              if (!refs.length) continue;
+              records++;
+              console.log(`- ${id} [${st}] "${rec.title || rec.name || ''}" -> ${refs.length} file(s)`);
+              const patch = {};
+              let recOk = true;
+              for (const ref of refs) {
+                totalFiles++;
+                if (DRY) { console.log(`    (dry) ${ref.path}: ${ref.url}`); continue; }
+                try {
+                  const nu = await migrateFile(ref.url);
+                  patch[ref.path] = nu; ok++;
+                  console.log(`    OK ${ref.path} -> ${nu}`);
+                } catch (e) {
+                  recOk = false; failed++;
+                  failures.push(`${acc}/${id} ${ref.path}: ${e.message}`);
+                  console.log(`    FAIL ${ref.path}: ${e.message}`);
+                }
+              }
+              if (!DRY && Object.keys(patch).length) {
+                patch['r2MigratedAt'] = Date.now();
+                patch['r2MigratedFrom'] = OLD.join(',');
+                if (!recOk) patch['r2MigrationPartial'] = true;
+                const pr = await fetchRetry(`${db}/${QUEUE_PATH}/${id}.json`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) });
+                if (!pr.ok) { failures.push(`${acc}/${id}: firebase PATCH HTTP ${pr.status}`); console.log(`    FAIL firebase patch ${pr.status}`); }
+              }
+            }
+          }
+          const lines = [
+            `## R2 migration ${DRY ? '(DRY RUN)' : ''}`,
+            `- Records: ${records}`, `- Files: ${totalFiles}`, DRY ? '' : `- Migrated OK: ${ok}`, DRY ? '' : `- Failed: ${failed}`,
+            failures.length ? `\n### Failures\n${failures.map(f => `- ${f}`).join('\n')}` : ''
+          ].filter(Boolean);
+          console.log('\n' + lines.join('\n'));
+          if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join('\n') + '\n');
+          if (failed) process.exit(1);
+          MIGRATE_EOF
+          node migrate.mjs
