@@ -122,6 +122,7 @@ class SpecialDays(private val context: Context, private val http: OkHttpClient) 
     }
 
     private suspend fun fetchGoogle(year: Int, country: String, calendarId: String): Boolean {
+        if (GOOGLE_API_KEY.isBlank()) return false
         val feedKey = "google_${year}_$country"
         synchronized(triedFeeds) { if (!triedFeeds.add(feedKey)) return false }
         var rows = cached(feedKey)
@@ -162,7 +163,7 @@ class SpecialDays(private val context: Context, private val http: OkHttpClient) 
     companion object {
         private const val CACHE_MS = 7L * 24 * 60 * 60 * 1000
         const val GOOGLE_CAL_BASE = "https://" + "www.googleapis.com/calendar/v3/calendars/"
-        const val GOOGLE_API_KEY = "AIzaSyAnNeYfEYF6Z41r-QBo2q8eWKaP-CBPlnc"
+        const val GOOGLE_API_KEY = "" // <-- OPTIONAL: Google Calendar API key for IN/BD holiday feeds; empty = skipped
         val EUROPE = listOf("GB", "IE", "DE", "FR", "ES", "PT", "IT", "NL", "BE", "CH", "AT", "SE", "NO", "DK", "FI", "PL", "CZ", "GR", "RU", "UA")
         val AMERICAS = listOf("US", "CA", "MX", "BR", "AR", "CL", "CO", "PE")
         val ASIA = listOf("JP", "KR", "CN", "HK", "SG", "VN", "ID", "KZ")

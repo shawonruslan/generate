@@ -19,10 +19,10 @@ data class Account(val key: String, val label: String, val databaseUrl: String)
 
 object Accounts {
     val all: List<Account> = listOf(
-        Account("zedge1", "ZEDGE1", "https://zedgeautomation-default-rtdb.firebaseio.com"),
-        Account("zedge2", "ZEDGE2", "https://zedge-automation-2-default-rtdb.asia-southeast1.firebasedatabase.app"),
-        Account("zedge3", "ZEDGE3", "https://zedge-automation-3-default-rtdb.asia-southeast1.firebasedatabase.app"),
-        Account("zedge4", "ZEDGE4", "https://zedge-4-default-rtdb.asia-southeast1.firebasedatabase.app"),
+        Account("zedge1", "ZEDGE1", "https://shimul-zedge1-default-rtdb.asia-southeast1.firebasedatabase.app"), // <-- CONFIG
+        Account("zedge2", "ZEDGE2", "https://shimul-zedge-2-default-rtdb.asia-southeast1.firebasedatabase.app"), // <-- CONFIG
+        Account("zedge3", "ZEDGE3", "https://shimul-zedge3-default-rtdb.firebaseio.com"), // <-- CONFIG
+        Account("zedge4", "ZEDGE4", "https://shimul-zedge-4-default-rtdb.firebaseio.com"), // <-- CONFIG
     )
     val keys: List<String> = all.map { it.key }
     /** Round-robin order used by Multi-Account Distribution. */
@@ -30,7 +30,7 @@ object Accounts {
     fun byKey(key: String): Account = all.firstOrNull { it.key == key } ?: all[0]
     fun isValid(key: String?): Boolean = key != null && all.any { it.key == key }
 
-    const val R2_WORKER_URL = "https://frosty-pine-2f7dzedge-r2-gateway.holaexplainer.workers.dev"
+    const val R2_WORKER_URL = "https://shimul.shawonhawladar.workers.dev" // <-- CONFIG: your Cloudflare R2 worker URL
     const val QUEUE_PATH = "wallpaperQueue"
     const val STATE_PATH = "uploadState"
     const val GH_SETTINGS_PATH = "dashboardSettings/ghPanel"
