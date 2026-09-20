@@ -186,6 +186,10 @@ object SchedulePlanner {
                 )
             )
             dayIdx++
+            // v30.6 PERF: stop once a day produced nothing and no pinned items remain - later days cannot do better
+            // (same stock, same rules). Without this, Mix Mode with stock only in un-selected types walked all 700 days
+            // on every rebuild and the calendar grid had to lay out 700 cells.
+            if (dayIdx >= MIN_DAYS && slots.all { it == null } && pinnedByDate.isEmpty()) break
         }
         val withRuns = try { RunSchedule.annotate(days, state, accountKey, rule.uploadedToday) } catch (_: Exception) { days }
         return SchedulePlan(rule, withRuns, buckets, pinnedCount, queued.size)

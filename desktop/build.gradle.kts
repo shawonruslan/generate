@@ -59,7 +59,12 @@ dependencies {
 compose.desktop {
     application {
         mainClass = "com.zedge.contentstudio.DesktopMainKt"
-        jvmArgs += listOf("-Dfile.encoding=UTF-8", "-Dsun.java2d.uiScale.enabled=true", "-Xmx1024m")
+        jvmArgs += listOf(
+            "-Dfile.encoding=UTF-8", "-Dsun.java2d.uiScale.enabled=true",
+            // v30.6 PERF: bigger heap + G1 with a short pause target; thumbnails are byte-budgeted (ImageCache) so this is headroom, not a fix
+            "-Xmx1536m", "-Xms256m", "-XX:+UseG1GC", "-XX:MaxGCPauseMillis=50", "-XX:+UseStringDeduplication",
+            "-Xshare:auto",
+        )
 
         nativeDistributions {
             targetFormats(TargetFormat.Msi, TargetFormat.Exe)

@@ -44,9 +44,21 @@ import java.util.TimeZone
 @Composable
 fun AuroraBackground(modifier: Modifier = Modifier, content: @Composable BoxScope.() -> Unit) {
     val p = ThemeState.palette
-    val t = rememberInfiniteTransition(label = "aurora")
-    val a by t.animateFloat(0f, 1f, infiniteRepeatable(tween(14000, easing = LinearEasing), RepeatMode.Reverse), label = "a")
-    val b by t.animateFloat(0f, 1f, infiniteRepeatable(tween(19000, easing = LinearEasing), RepeatMode.Reverse), label = "b")
+    // v30.6 PERF: the glow drifts at ~8 fps from a coroutine instead of a 60 fps infinite transition. The old version
+    // repainted three full-window radial gradients on every vsync - on a laptop without GPU acceleration that alone kept
+    // the CPU busy and made the whole app stutter. The values are read only inside the Canvas draw lambda, so a tick
+    // re-draws the backdrop without recomposing the screen content on top of it.
+    var a by remember { mutableStateOf(0f) }
+    var b by remember { mutableStateOf(0f) }
+    LaunchedEffect(Unit) {
+        val t0 = System.nanoTime()
+        while (true) {
+            val t = (System.nanoTime() - t0) / 1_000_000_000f
+            a = auroraWave(t / 14f)
+            b = auroraWave(t / 19f)
+            delay(125)
+        }
+    }
     val alpha = if (p.isDark) 0.34f else 0.18f
     Box(modifier.fillMaxSize().background(p.bg)) {
         Canvas(Modifier.fillMaxSize()) {
@@ -61,6 +73,12 @@ fun AuroraBackground(modifier: Modifier = Modifier, content: @Composable BoxScop
         }
         content()
     }
+}
+
+/** 0 -> 1 -> 0 triangle wave (period 2), replaces RepeatMode.Reverse of the old infinite transition. */
+private fun auroraWave(x: Float): Float {
+    val f = x % 2f
+    return if (f < 1f) f else 2f - f
 }
 
 @Composable

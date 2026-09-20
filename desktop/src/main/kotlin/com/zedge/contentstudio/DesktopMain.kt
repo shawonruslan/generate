@@ -308,7 +308,7 @@ private fun SideRail(page: Page, activeKey: String, connected: Boolean, onSelect
                 Spacer(Modifier.width(12.dp))
                 Column {
                     Text("Meta Hawladar", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text("Windows · Glass · v30", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+                    Text("Windows · Glass · v30.6", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
                 }
             }
         }

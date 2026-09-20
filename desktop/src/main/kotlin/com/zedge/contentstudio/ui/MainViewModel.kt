@@ -30,6 +30,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -142,7 +143,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val planCtx = combine(activeKey, repo.variety, repo.varietyUsed) { key, vty, used -> Triple(key, vty[key], used[key]) }
     val plan: StateFlow<SchedulePlan> = combine(items, uploadState, planCtx, RealTime.tick, specialDays.version) { list, state, ctx, _, _ ->
         withContext(Dispatchers.Default) { SchedulePlanner.build(list, state, ctx.first, ctx.second, ctx.third) }
-    }.stateIn(viewModelScope, SharingStarted.Eagerly, SchedulePlan.EMPTY)
+    }.conflate() // v30.6 PERF: a burst of stream events (start-up: 4 accounts x several paths) builds the plan once, not once per event
+        .stateIn(viewModelScope, SharingStarted.Eagerly, SchedulePlan.EMPTY)
 
     init {
         viewModelScope.launch { runCatching { specialDays.syncAll() } }
