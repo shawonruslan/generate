@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+
+    <!-- soft glow behind the mark -->
+    <path android:pathData="M54,54 m-30,0 a30,30 0 1,0 60,0 a30,30 0 1,0 -60,0 z">
+        <aapt:attr name="android:fillColor">
+            <gradient android:type="radial" android:centerX="54" android:centerY="54" android:gradientRadius="30">
+                <item android:offset="0" android:color="#66FFD400" />
+                <item android:offset="1" android:color="#00FFD400" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- back card (deep) -->
+    <group android:rotation="-12" android:pivotX="54" android:pivotY="54">
+        <path android:fillColor="#FFAB00" android:fillAlpha="0.40"
+            android:pathData="M43,33 h22 a10,10 0 0,1 10,10 v22 a10,10 0 0,1 -10,10 h-22 a10,10 0 0,1 -10,-10 v-22 a10,10 0 0,1 10,-10 z" />
+    </group>
+
+    <!-- mid card -->
+    <group android:rotation="-6" android:pivotX="54" android:pivotY="54">
+        <path android:fillColor="#FFC533" android:fillAlpha="0.72"
+            android:pathData="M43,33 h22 a10,10 0 0,1 10,10 v22 a10,10 0 0,1 -10,10 h-22 a10,10 0 0,1 -10,-10 v-22 a10,10 0 0,1 10,-10 z" />
+    </group>
+
+    <!-- front card with gradient -->
+    <path android:pathData="M43,33 h22 a10,10 0 0,1 10,10 v22 a10,10 0 0,1 -10,10 h-22 a10,10 0 0,1 -10,-10 v-22 a10,10 0 0,1 10,-10 z">
+        <aapt:attr name="android:fillColor">
+            <gradient android:type="linear" android:startX="33" android:startY="33" android:endX="75" android:endY="75">
+                <item android:offset="0" android:color="#FFE566" />
+                <item android:offset="0.55" android:color="#FFD400" />
+                <item android:offset="1" android:color="#FFA800" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <!-- glass highlight on the front card -->
+    <path android:fillColor="#FFFFFF" android:fillAlpha="0.22"
+        android:pathData="M43,33 h22 a10,10 0 0,1 10,10 v6 q-21,6 -42,0 v-6 a10,10 0 0,1 10,-10 z" />
+
+    <!-- C ring -->
+    <path android:strokeColor="#211D12" android:strokeWidth="6.5" android:strokeLineCap="round"
+        android:pathData="M64.5,45.2 A13.5,13.5 0 1,0 64.5,62.8" />
+    <!-- play mark inside the C -->
+    <path android:fillColor="#211D12"
+        android:pathData="M50.5,48.2 L60.5,54 L50.5,59.8 Z" />
+</vector>
