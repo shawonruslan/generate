@@ -1,0 +1,313 @@
+name: Build Desktop App
+
+# Builds the Automation Hub desktop app (Flutter) for Windows, and optionally
+# Linux + macOS, on GitHub's own machines - no Flutter / Visual Studio needed
+# on your PC.
+#
+# How to use (same idea as the Android `release-apk.yml`):
+#   1. Push this `desktop` folder to a GitHub repository (the folder itself as
+#      the repo root, OR the whole bundle - the workflow finds pubspec.yaml).
+#   2. GitHub -> Actions -> "Build Desktop App" -> Run workflow.
+#   3. When it finishes, open the run -> Artifacts -> download
+#      `AutomationHub-<profile>-windows-x64-v<version>.zip`, extract, run
+#      `automation_hub_desktop.exe`.
+#   4. Push a version tag (`git tag v27.9.0 && git push --tags`) to also get a
+#      GitHub Release with every platform attached.
+#
+# No secrets are required. BUILD_PROFILE selects the customer bundle that is
+# compiled in (see lib/config/profile_data.dart).
+
+on:
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: "Which desktop builds to make"
+        type: choice
+        default: windows
+        options:
+          - windows
+          - windows+linux
+          - all
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write   # needed to create the GitHub Release on tag pushes
+
+env:
+  # Flutter version used on the build machines. Pinned on purpose: newer
+  # stable releases made `IconData` a final class, which breaks
+  # font_awesome_flutter 10.x ("IconData can't be extended outside of its
+  # library"). Bump this only after font_awesome_flutter publishes a fix.
+  FLUTTER_VERSION: "3.35.x"
+  BUILD_PROFILE: shawon
+  FLUTTER_CHANNEL: stable
+  # Set to the sub-folder that contains pubspec.yaml, or leave "auto" to let the
+  # workflow find it (repo root, ./desktop or ./automation_hub_desktop).
+  PROJECT_DIR: auto
+
+jobs:
+  # ---------------------------------------------------------------- Windows
+  windows:
+    name: Windows x64
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Locate Flutter project
+        id: dir
+        shell: bash
+        run: |
+          set -euo pipefail
+          DIR="${PROJECT_DIR}"
+          if [ "$DIR" = "auto" ]; then
+            for c in . desktop automation_hub_desktop; do
+              if [ -f "$c/pubspec.yaml" ]; then DIR="$c"; break; fi
+            done
+          fi
+          if [ ! -f "$DIR/pubspec.yaml" ]; then echo "::error::pubspec.yaml not found"; exit 1; fi
+          VERSION=$(grep -E '^version:' "$DIR/pubspec.yaml" | head -n1 | sed -E 's/version:[[:space:]]*//; s/\+.*//')
+          echo "dir=$DIR" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Project dir: $DIR  version: $VERSION"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Flutter doctor
+        run: flutter doctor -v
+
+      - name: Generate Windows runner (first time only)
+        working-directory: ${{ steps.dir.outputs.dir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter config --enable-windows-desktop
+          if [ ! -d windows ]; then
+            flutter create . --platforms=windows --project-name automation_hub_desktop --org com.automationhub
+          fi
+
+      - name: Pub get
+        working-directory: ${{ steps.dir.outputs.dir }}
+        run: flutter pub get
+
+      - name: Analyze (errors only)
+        working-directory: ${{ steps.dir.outputs.dir }}
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+
+      - name: Build Windows release
+        working-directory: ${{ steps.dir.outputs.dir }}
+        run: flutter build windows --release --dart-define=BUILD=${{ env.BUILD_PROFILE }}
+
+      - name: Package
+        id: pkg
+        working-directory: ${{ steps.dir.outputs.dir }}
+        shell: pwsh
+        run: |
+          $out = "AutomationHub-${env:BUILD_PROFILE}-windows-x64-v${{ steps.dir.outputs.version }}"
+          $rel = Get-ChildItem -Directory -Recurse build/windows | Where-Object { $_.FullName -match 'runner\\Release$' } | Select-Object -First 1
+          if (-not $rel) { Write-Error "Release folder not found under build/windows"; exit 1 }
+          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP/dist/$out" | Out-Null
+          Copy-Item -Path "$($rel.FullName)/*" -Destination "$env:RUNNER_TEMP/dist/$out" -Recurse
+          Copy-Item -Path README.md -Destination "$env:RUNNER_TEMP/dist/$out/README.md" -ErrorAction SilentlyContinue
+          Compress-Archive -Path "$env:RUNNER_TEMP/dist/$out" -DestinationPath "$env:RUNNER_TEMP/dist/$out.zip" -Force
+          "path=$env:RUNNER_TEMP/dist/$out.zip" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "name=$out" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Built $out.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pkg.outputs.name }}
+          path: ${{ steps.pkg.outputs.path }}
+          if-no-files-found: error
+          retention-days: 30
+
+  # ---------------------------------------------------------------- Linux
+  linux:
+    name: Linux x64
+    if: ${{ github.event_name == 'push' || inputs.platforms == 'windows+linux' || inputs.platforms == 'all' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Locate Flutter project
+        id: dir
+        run: |
+          set -euo pipefail
+          DIR="${PROJECT_DIR}"
+          if [ "$DIR" = "auto" ]; then
+            for c in . desktop automation_hub_desktop; do
+              if [ -f "$c/pubspec.yaml" ]; then DIR="$c"; break; fi
+            done
+          fi
+          if [ ! -f "$DIR/pubspec.yaml" ]; then echo "::error::pubspec.yaml not found"; exit 1; fi
+          VERSION=$(grep -E '^version:' "$DIR/pubspec.yaml" | head -n1 | sed -E 's/version:[[:space:]]*//; s/\+.*//')
+          echo "dir=$DIR" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libmpv-dev mpv libstdc++-12-dev
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Generate Linux runner (first time only)
+        working-directory: ${{ steps.dir.outputs.dir }}
+        run: |
+          set -euo pipefail
+          flutter config --enable-linux-desktop
+          if [ ! -d linux ]; then
+            flutter create . --platforms=linux --project-name automation_hub_desktop --org com.automationhub
+          fi
+
+      - name: Pub get
+        working-directory: ${{ steps.dir.outputs.dir }}
+        run: flutter pub get
+
+      - name: Build Linux release
+        working-directory: ${{ steps.dir.outputs.dir }}
+        run: flutter build linux --release --dart-define=BUILD=${{ env.BUILD_PROFILE }}
+
+      - name: Package
+        id: pkg
+        working-directory: ${{ steps.dir.outputs.dir }}
+        run: |
+          set -euo pipefail
+          OUT="AutomationHub-${BUILD_PROFILE}-linux-x64-v${{ steps.dir.outputs.version }}"
+          BUNDLE=$(find build/linux -type d -path '*/release/bundle' | head -n1)
+          [ -n "$BUNDLE" ] || { echo "::error::bundle not found"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/dist/$OUT"
+          cp -r "$BUNDLE"/. "$RUNNER_TEMP/dist/$OUT/"
+          cp README.md "$RUNNER_TEMP/dist/$OUT/" || true
+          tar -C "$RUNNER_TEMP/dist" -czf "$RUNNER_TEMP/dist/$OUT.tar.gz" "$OUT"
+          echo "path=$RUNNER_TEMP/dist/$OUT.tar.gz" >> "$GITHUB_OUTPUT"
+          echo "name=$OUT" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pkg.outputs.name }}
+          path: ${{ steps.pkg.outputs.path }}
+          if-no-files-found: error
+          retention-days: 30
+
+  # ---------------------------------------------------------------- macOS
+  macos:
+    name: macOS (universal)
+    if: ${{ github.event_name == 'push' || inputs.platforms == 'all' }}
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Locate Flutter project
+        id: dir
+        run: |
+          set -euo pipefail
+          DIR="${PROJECT_DIR}"
+          if [ "$DIR" = "auto" ]; then
+            for c in . desktop automation_hub_desktop; do
+              if [ -f "$c/pubspec.yaml" ]; then DIR="$c"; break; fi
+            done
+          fi
+          if [ ! -f "$DIR/pubspec.yaml" ]; then echo "::error::pubspec.yaml not found"; exit 1; fi
+          VERSION=$(grep -E '^version:' "$DIR/pubspec.yaml" | head -n1 | sed -E 's/version:[[:space:]]*//; s/\+.*//')
+          echo "dir=$DIR" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Generate macOS runner (first time only)
+        working-directory: ${{ steps.dir.outputs.dir }}
+        run: |
+          set -euo pipefail
+          flutter config --enable-macos-desktop
+          if [ ! -d macos ]; then
+            flutter create . --platforms=macos --project-name automation_hub_desktop --org com.automationhub
+          fi
+          # The app talks to Firebase / R2 / GitHub and opens local files.
+          for f in macos/Runner/DebugProfile.entitlements macos/Runner/Release.entitlements; do
+            if ! grep -q 'com.apple.security.network.client' "$f"; then
+              /usr/libexec/PlistBuddy -c 'Add :com.apple.security.network.client bool true' "$f"
+            fi
+            if ! grep -q 'com.apple.security.files.user-selected.read-write' "$f"; then
+              /usr/libexec/PlistBuddy -c 'Add :com.apple.security.files.user-selected.read-write bool true' "$f"
+            fi
+          done
+
+      - name: Pub get
+        working-directory: ${{ steps.dir.outputs.dir }}
+        run: flutter pub get
+
+      - name: Build macOS release
+        working-directory: ${{ steps.dir.outputs.dir }}
+        run: flutter build macos --release --dart-define=BUILD=${{ env.BUILD_PROFILE }}
+
+      - name: Package
+        id: pkg
+        working-directory: ${{ steps.dir.outputs.dir }}
+        run: |
+          set -euo pipefail
+          OUT="AutomationHub-${BUILD_PROFILE}-macos-v${{ steps.dir.outputs.version }}"
+          APP=$(find build/macos -type d -name '*.app' -path '*/Release/*' | head -n1)
+          [ -n "$APP" ] || { echo "::error::.app not found"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/dist"
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "$RUNNER_TEMP/dist/$OUT.zip"
+          echo "path=$RUNNER_TEMP/dist/$OUT.zip" >> "$GITHUB_OUTPUT"
+          echo "name=$OUT" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pkg.outputs.name }}
+          path: ${{ steps.pkg.outputs.path }}
+          if-no-files-found: error
+          retention-days: 30
+
+  # ---------------------------------------------------------------- Release (tags only)
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, linux, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Automation Hub Desktop ${{ github.ref_name }} (${{ env.BUILD_PROFILE }})
+          files: dist/**
+          generate_release_notes: true
+          body: |
+            Automation Hub desktop app **${{ github.ref_name }}** - profile `${{ env.BUILD_PROFILE }}`.
+
+            * Windows: extract the zip and run `automation_hub_desktop.exe` (keep all files together).
+            * Linux: extract the tar.gz, `chmod +x automation_hub_desktop`, needs `libmpv` (`sudo apt install mpv`).
+            * macOS: unzip, right-click the app -> Open (unsigned build).
