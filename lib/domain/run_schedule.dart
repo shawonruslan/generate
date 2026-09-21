@@ -193,23 +193,62 @@ class ScheduleRule {
   }
 }
 
+/// v27.11 missed-slot recovery: run markers carry the REAL result
+/// (`status`: started | uploaded | failed | idle | skipped-limit). Legacy markers
+/// without a status = uploaded. "started" older than 70 min = stale = failed (same
+/// rule as the workflow gate). Returns `done` | `running` | `failed` | `none`.
+String gateRunStatus(Map<String, dynamic>? e) {
+  if (e == null) return 'none';
+  final st = '${e['status'] ?? ''}';
+  if (st.isEmpty || st == 'uploaded' || st == 'skipped-limit') return 'done';
+  if (st == 'started') {
+    final at = e['at'] is num ? (e['at'] as num).toInt() : int.tryParse('${e['at'] ?? ''}') ?? 0;
+    return DateTime.now().millisecondsSinceEpoch - at > 70 * 60000 ? 'failed' : 'running';
+  }
+  return 'failed';
+}
+
+int gateRunAttempts(Map<String, dynamic>? e) => e == null ? 0 : (e['attempts'] is num ? (e['attempts'] as num).toInt() : int.tryParse('${e['attempts'] ?? ''}') ?? 0);
+
+/// Short suffix for the "W1 10:27 (…)" run summary line.
+String gateRunState(Map<String, dynamic>? e) {
+  final st = gateRunStatus(e);
+  if (st == 'done') return e?['retry'] == true ? ' (recovered)' : (e?['catchUp'] == true ? ' (catch-up)' : '');
+  if (st == 'running') return ' (running…)';
+  final att = gateRunAttempts(e);
+  return ' (${e?['status'] == 'idle' ? 'nothing to upload' : 'FAILED'}${att >= 3 ? ' · gave up' : ' · retry pending'})';
+}
+
 /// `gateRunLabel(e)`
 String gateRunLabel(Map<String, dynamic>? e) {
   if (e == null) return 'uploaded';
+  final st = gateRunStatus(e);
   final dh = e['dhaka']?.toString().trim() ?? '';
   final t = dh.isEmpty ? '' : dh.split(' ').last;
-  return 'uploaded${t.isNotEmpty ? ' $t' : ''}${e['catchUp'] == true ? ' (catch-up)' : ''}';
+  if (st == 'running') return 'run in progress${t.isNotEmpty ? ' · started $t' : ''}${e['retry'] == true ? ' (retry)' : ''}';
+  if (st == 'failed') {
+    final att = gateRunAttempts(e);
+    final err = '${e['error'] ?? ''}';
+    final why = err.isNotEmpty ? (err.length > 70 ? err.substring(0, 70) : err) : (e['status'] == 'idle' ? 'nothing to upload' : 'run failed');
+    final plan = att >= 3 ? 'Missed · gave up after 3 attempts' : 'Missed · will retry ${e['plan'] == 'in-window' ? 'in this window' : 'in the next window'}';
+    return '$plan — $why';
+  }
+  return 'uploaded${t.isNotEmpty ? ' $t' : ''}${e['retry'] == true ? ' (recovered)' : e['catchUp'] == true ? ' (catch-up)' : ''}';
 }
 
 /// One row of the "Today's uploads" overview.
 class OverviewSlot {
-  OverviewSlot({required this.run, required this.done, required this.passed, required this.due, required this.detail, this.gateRun});
+  OverviewSlot({required this.run, required this.done, required this.passed, required this.due, required this.detail, this.gateRun, this.missed = false, this.running = false});
   final RunPrediction run;
   final bool done;
   final bool passed;
   final bool due;
   final String detail;
   final Map<String, dynamic>? gateRun;
+  /// v27.11: the run for this slot failed / never happened - the gate will retry it.
+  final bool missed;
+  /// v27.11: a run for this slot is in progress right now.
+  final bool running;
 }
 
 class OverviewCard {

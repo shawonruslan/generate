@@ -65,6 +65,45 @@ class NotificationCenter extends ChangeNotifier {
     return 'info';
   }
 
+  /// v27.11 missed-slot recovery: alerts written by the workflow gate / bot into
+  /// `dashboardSettings/alerts` (slot missed -> retry plan, slot recovered, gave up).
+  /// Shown once per device (ids remembered in SharedPreferences), 48 h look-back so a
+  /// miss that happened while the app was closed is still surfaced on the next start.
+  static const String _seenKey = 'zedgeAlertSeen:v27';
+  Map<String, int>? _seen;
+
+  Future<int> addRemoteAlerts(dynamic snapshot, String acc) async {
+    if (snapshot is! Map) return 0;
+    final sp = await SharedPreferences.getInstance();
+    _seen ??= () {
+      try {
+        final m = jsonDecode(sp.getString(_seenKey) ?? '{}');
+        if (m is Map) return m.map((k, v) => MapEntry('$k', (v as num?)?.toInt() ?? 0));
+      } catch (_) {}
+      return <String, int>{};
+    }();
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final fresh = <Map>[];
+    for (final v in snapshot.values) {
+      if (v is! Map) continue;
+      final id = '${v['id'] ?? ''}';
+      final ts = (v['ts'] as num?)?.toInt() ?? 0;
+      if (id.isEmpty || _seen!.containsKey(id) || now - ts > 48 * 3600 * 1000) continue;
+      fresh.add(v);
+    }
+    fresh.sort((a, b) => ((a['ts'] as num?)?.toInt() ?? 0).compareTo((b['ts'] as num?)?.toInt() ?? 0));
+    for (final a in fresh) {
+      _seen!['${a['id']}'] = now;
+      final k = '${a['kind'] ?? 'warn'}';
+      add('$acc: ${a['text'] ?? ''}', (k == 'ok' || k == 'err' || k == 'info') ? k : 'warn', acc);
+    }
+    _seen!.removeWhere((_, t) => now - t > 7 * 86400000);
+    try {
+      await sp.setString(_seenKey, jsonEncode(_seen));
+    } catch (_) {}
+    return fresh.length;
+  }
+
   void add(String rawText, String? kind, String acc) {
     final text = rawText.replaceAll(RegExp(r'\s+'), ' ').trim();
     if (text.isEmpty) return;

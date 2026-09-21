@@ -8,8 +8,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// per-element colours). Persisted per account in `zedgeTheme:v26:<acc>` and
 /// shared through Firebase `dashboardSettings/theme`.
 class ThemePreset {
-  const ThemePreset(this.key, this.name, this.mode, this.primary, this.accent, this.bg, this.surface, this.text);
+  const ThemePreset(this.key, this.name, this.mode, this.primary, this.accent, this.bg, this.surface, this.text, {this.vibe = ''});
   final String key, name, mode, primary, accent, bg, surface, text;
+  /// v27.12 - short mood line shown on the preset tile.
+  final String vibe;
+  bool get isDark => mode == 'dark';
 }
 
 const List<ThemePreset> kThemePresets = [
@@ -26,6 +29,19 @@ const List<ThemePreset> kThemePresets = [
   ThemePreset('aurora', 'Aurora', 'dark', '#34d399', '#60a5fa', '#06111f', '#0e1d31', '#e3f6ff'),
   ThemePreset('ember', 'Ember', 'dark', '#fb7185', '#f59e0b', '#120a0f', '#1f121a', '#ffe9ee'),
   ThemePreset('graphite', 'Graphite', 'dark', '#38bdf8', '#818cf8', '#0b0d12', '#151922', '#e5e7eb'),
+  // v27.12 presets (also in the web panel + Android app)
+  ThemePreset('nebula', 'Nebula', 'dark', '#c084fc', '#f472b6', '#0a0614', '#160d26', '#f3e8ff', vibe: 'Purple-pink galaxy'),
+  ThemePreset('cyber', 'Cyberpunk', 'dark', '#00f0ff', '#ff2bd6', '#050510', '#0d0f22', '#e0fbff', vibe: 'Neon cyan + magenta'),
+  ThemePreset('royal', 'Royal Blue', 'dark', '#3b82f6', '#fbbf24', '#050a1a', '#0b1430', '#e8efff', vibe: 'Navy with gold accent'),
+  ThemePreset('forest', 'Forest', 'dark', '#4ade80', '#a3e635', '#061009', '#0d1c12', '#e6ffee', vibe: 'Deep green calm'),
+  ThemePreset('lava', 'Lava', 'dark', '#ff4d4d', '#ffb347', '#0f0505', '#1c0b0b', '#ffecec', vibe: 'Hot red + amber'),
+  ThemePreset('coffee', 'Coffee', 'dark', '#d4a373', '#e9c46a', '#14100c', '#211a14', '#f5ead9', vibe: 'Warm brown latte'),
+  ThemePreset('neon', 'Neon Lime', 'dark', '#a3ff12', '#00e5ff', '#070a06', '#101610', '#f0ffe0', vibe: 'Electric lime glow'),
+  ThemePreset('sunset', 'Sunset', 'light', '#f97316', '#ec4899', '#fff8f3', '#ffffff', '#2a1508', vibe: 'Orange to pink sky'),
+  ThemePreset('sakura', 'Sakura', 'light', '#f472b6', '#a78bfa', '#fff7fb', '#ffffff', '#2d1a2a', vibe: 'Soft pink blossom'),
+  ThemePreset('candy', 'Candy', 'light', '#8b5cf6', '#06b6d4', '#f7f5ff', '#ffffff', '#1e1538', vibe: 'Violet + cyan pop'),
+  ThemePreset('ice', 'Ice', 'light', '#0ea5e9', '#67e8f9', '#f0f9ff', '#ffffff', '#0c2a3a', vibe: 'Cool sky blue'),
+  ThemePreset('slate', 'Slate Pro', 'light', '#475569', '#0ea5e9', '#f1f5f9', '#ffffff', '#0f172a', vibe: 'Clean corporate grey'),
 ];
 
 ThemePreset? presetByKey(String k) => kThemePresets.where((p) => p.key == k).firstOrNull;

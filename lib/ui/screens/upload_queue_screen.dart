@@ -10,6 +10,7 @@ import '../../data/meta_book.dart';
 import '../../data/models.dart';
 import '../../data/queue_repository.dart';
 import '../../domain/archive_classifier.dart';
+import '../../domain/theme_engine.dart';
 import '../../state/app_state.dart';
 import '../dialogs/asset_details.dart';
 import '../dialogs/purge_overlay.dart';
@@ -482,73 +483,541 @@ class _VideoUploadCardState extends State<_VideoUploadCard> {
     if (mounted) setState(() => _busy = false);
   }
 
+  void _clear() => setState(() {
+        _video = null;
+        _thumb = null;
+        _frames = [];
+        _status = 'No video selected';
+      });
+
+  int get _thumbIndex => _thumb == null ? -1 : _frames.indexWhere((f) => identical(f, _thumb));
+
+  /// 0 = pick a video, 1 = capturing, 2 = choose cover, 3 = ready to queue.
+  int get _step => _video == null ? 0 : (_frames.isEmpty ? 1 : (_thumb == null ? 2 : 3));
+
+  ({String icon, Color color}) _statusStyle(ZedgePalette p) {
+    final s = _status.toLowerCase();
+    if (s.contains('failed')) return (icon: 'fa-triangle-exclamation', color: p.danger);
+    if (s.contains('queued successfully')) return (icon: 'fa-circle-check', color: p.ok);
+    if (s.contains('capturing') || s.contains('uploading') || s.contains('resizing') || s.contains('...')) return (icon: 'fa-spinner', color: p.info);
+    if (s.contains('selected as cover') || s.contains('captured')) return (icon: 'fa-check', color: p.primary);
+    return (icon: 'fa-circle-info', color: p.muted);
+  }
+
   @override
   Widget build(BuildContext context) {
     final p = context.pal;
+    final meta = kVideoTypeMeta[_type]!;
+    final st = _statusStyle(p);
     return GlassCard(
       padding: const EdgeInsets.all(18),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        const SectionTitle('Video Content (Live Wallpaper / Charging Animation)', icon: 'fa-film', subtitle: 'MP4/MOV, max 50 MB, min 1080×1920, max 30s. A 1620×2880 JPEG cover thumbnail is captured automatically from the video.'),
-        const SizedBox(height: 14),
-        Wrap(spacing: 14, runSpacing: 12, crossAxisAlignment: WrapCrossAlignment.end, children: [
-          Field('Video type', child: Segmented<String>(options: const [('LIVE_WALLPAPER', 'Live Wallpaper'), ('CHARGING_ANIMATION', 'Charging Animation')], value: _type, onChanged: (v) => setState(() => _type = v))),
-          Field(
-            'Video File',
-            child: SizedBox(
-              width: 360,
-              child: DropZone(
-                title: _video?.name ?? 'Choose video',
-                subtitle: _video == null ? 'Drop an MP4 / MOV here' : formatBytes(_video!.size),
+        SectionTitle(
+          'Video Content (Live Wallpaper / Charging Animation)',
+          icon: 'fa-film',
+          subtitle: 'MP4/MOV, max 50 MB, min 1080×1920, max 30s. A 1620×2880 JPEG cover thumbnail is captured automatically from the video.',
+          trailing: _VideoStepper(step: _step),
+        ),
+        const SizedBox(height: 16),
+        LayoutBuilder(builder: (context, c) {
+          final wide = c.maxWidth >= 820;
+          final types = Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            _StepLabel(n: 1, text: 'Video type', done: true, active: _step == 0),
+            const SizedBox(height: 8),
+            for (final k in const ['LIVE_WALLPAPER', 'CHARGING_ANIMATION']) ...[
+              _VideoTypeOption(
+                meta: kVideoTypeMeta[k]!,
+                selected: _type == k,
+                enabled: !_busy,
+                desc: k == 'LIVE_WALLPAPER' ? 'Loops on the lock & home screen. Vertical 9:16, up to 30 s.' : 'Plays when the phone is plugged in. Short vertical loop, up to 30 s.',
+                chips: k == 'LIVE_WALLPAPER' ? const ['1080×1920+', '≤ 30 s', 'MP4 / MOV'] : const ['1080×1920+', '≤ 30 s', 'Loop'],
+                onTap: () => setState(() => _type = k),
+              ),
+              if (k == 'LIVE_WALLPAPER') const SizedBox(height: 8),
+            ],
+          ]);
+          final drop = Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            _StepLabel(n: 2, text: 'Video file', done: _video != null, active: _step == 0 && _video == null),
+            const SizedBox(height: 8),
+            if (_video == null)
+              DropZone(
+                title: 'Drop your ${meta.label.toLowerCase()} video here',
+                subtitle: 'MP4 or MOV · max ${formatBytes(kVideoMaxBytes)} · vertical 1080×1920 or larger',
                 icon: 'fa-file-video',
                 buttonLabel: 'Choose video',
                 extensions: const ['mp4', 'mov'],
                 multiple: false,
-                height: 96,
-                dense: true,
+                height: wide ? 176 : 150,
                 onFiles: (fl) async {
                   if (fl.isNotEmpty) await _setVideo(fl.first);
                 },
+              )
+            else
+              _VideoFileTile(
+                file: _video!,
+                meta: meta,
+                thumb: _thumb,
+                busy: _busy || (_frames.isEmpty && !_status.toLowerCase().contains('failed')),
+                onReplace: _busy
+                    ? null
+                    : () async {
+                        final fl = await pickLocalFiles(multiple: false, extensions: const ['mp4', 'mov']);
+                        if (fl.isNotEmpty) await _setVideo(fl.first);
+                      },
+                onRemove: _busy ? null : _clear,
               ),
+          ]);
+          if (wide) {
+            return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              SizedBox(width: 300, child: types),
+              const SizedBox(width: 16),
+              Expanded(child: drop),
+            ]);
+          }
+          return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [types, const SizedBox(height: 14), drop]);
+        }),
+        const SizedBox(height: 16),
+        // ---- cover thumbnail filmstrip
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(color: p.tintSoft.withValues(alpha: p.isDark ? 0.35 : 0.6), borderRadius: BorderRadius.circular(p.radiusMd), border: Border.all(color: p.border)),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Wrap(spacing: 10, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
+              _StepLabel(n: 3, text: 'Cover thumbnail', done: _thumb != null, active: _step == 2),
+              Text('5 frames are captured automatically - click the best one. It becomes the 1620×2880 JPEG cover on Zedge.', style: TextStyle(fontSize: 12, color: p.muted)),
+            ]),
+            const SizedBox(height: 12),
+            _FrameStrip(
+              frames: _frames,
+              selected: _thumbIndex,
+              capturing: _video != null && _frames.isEmpty && !_status.toLowerCase().contains('failed'),
+              onPick: _busy
+                  ? null
+                  : (i) => setState(() {
+                        _thumb = _frames[i];
+                        _status = 'Frame ${i + 1} selected as cover thumbnail.';
+                      }),
             ),
-          ),
-        ]),
+          ]),
+        ),
         const SizedBox(height: 14),
-        Text('Cover Thumbnail', style: TextStyle(fontWeight: FontWeight.w800, color: p.text, fontSize: 13)),
-        const SizedBox(height: 4),
-        Text('5 frames auto-captured — click the best one', style: TextStyle(fontSize: 12, color: p.muted)),
-        const SizedBox(height: 10),
-        if (_frames.isEmpty)
-          Container(height: 80, alignment: Alignment.centerLeft, child: Text(_status, style: TextStyle(fontSize: 12.5, color: p.muted)))
-        else
-          Wrap(spacing: 10, runSpacing: 10, children: [
-            for (var i = 0; i < _frames.length; i++)
-              InkWell(
-                onTap: () => setState(() {
-                  _thumb = _frames[i];
-                  _status = 'Frame ${i + 1} selected as cover thumbnail.';
-                }),
-                borderRadius: BorderRadius.circular(10),
-                child: Container(
-                  width: 92,
-                  height: 164,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: identical(_thumb, _frames[i]) ? p.primary : p.border, width: identical(_thumb, _frames[i]) ? 3 : 1),
+        // ---- footer: status + queue button
+        LayoutBuilder(builder: (context, c) {
+          final status = Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+            decoration: BoxDecoration(color: st.color.withValues(alpha: p.isDark ? 0.14 : 0.10), borderRadius: BorderRadius.circular(999), border: Border.all(color: st.color.withValues(alpha: 0.35))),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              if (st.icon == 'fa-spinner') SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2, color: st.color)) else Fa(st.icon, size: 12, color: st.color),
+              const SizedBox(width: 8),
+              Flexible(child: Text(_status, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12.5, color: p.text, fontWeight: FontWeight.w600))),
+            ]),
+          );
+          final btn = ZButton(
+            _video == null ? 'Queue Video' : 'Queue ${meta.label}',
+            icon: 'fa-cloud-upload-alt',
+            busy: _busy,
+            tooltip: _video == null ? 'Add a video first' : (_thumb == null ? 'Pick a cover frame first' : 'Add to the upload queue'),
+            onPressed: _video != null && _thumb != null && !_busy ? _submit : null,
+          );
+          if (c.maxWidth < 560) {
+            return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [status, const SizedBox(height: 10), btn]);
+          }
+          return Row(children: [Expanded(child: Align(alignment: Alignment.centerLeft, child: status)), const SizedBox(width: 12), btn]);
+        }),
+      ]),
+    );
+  }
+}
+
+/// "1 Type · 2 Video · 3 Cover · Queue" progress chips in the card header.
+class _VideoStepper extends StatelessWidget {
+  const _VideoStepper({required this.step});
+  final int step;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.pal;
+    const labels = ['Type', 'Video', 'Cover', 'Queue'];
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(color: p.surfaceHover.withValues(alpha: 0.7), borderRadius: BorderRadius.circular(999), border: Border.all(color: p.border)),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        for (var i = 0; i < labels.length; i++) ...[
+          if (i > 0) Container(width: 14, height: 1.5, color: i <= step ? p.primary : p.border),
+          Builder(builder: (_) {
+            final done = i < step || (i == 3 && step == 3);
+            final active = i == step;
+            return Tooltip(
+              message: 'Step ${i + 1}: ${labels[i]}',
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                padding: EdgeInsets.symmetric(horizontal: active ? 10 : 8, vertical: 5),
+                decoration: BoxDecoration(
+                  gradient: active ? p.buttonGradient : null,
+                  color: active ? null : (done ? p.ok.withValues(alpha: 0.16) : Colors.transparent),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  if (done) Fa('fa-check', size: 9, color: active ? p.buttonFg : p.ok) else Text('${i + 1}', style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w900, color: active ? p.buttonFg : p.muted)),
+                  const SizedBox(width: 5),
+                  Text(labels[i], style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: active ? p.buttonFg : (done ? p.ok : p.muted))),
+                ]),
+              ),
+            );
+          }),
+        ],
+      ]),
+    );
+  }
+}
+
+class _StepLabel extends StatelessWidget {
+  const _StepLabel({required this.n, required this.text, required this.done, required this.active});
+  final int n;
+  final String text;
+  final bool done, active;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.pal;
+    final c = done ? p.ok : (active ? p.primary : p.muted);
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      Container(
+        width: 20,
+        height: 20,
+        decoration: BoxDecoration(color: done ? p.ok : (active ? p.primary : p.surfaceHover), shape: BoxShape.circle, border: Border.all(color: done || active ? Colors.transparent : p.border)),
+        alignment: Alignment.center,
+        child: done ? Fa('fa-check', size: 9, color: Colors.white) : Text('$n', style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w900, color: active ? p.onPrimary : p.muted)),
+      ),
+      const SizedBox(width: 8),
+      Text(text, style: TextStyle(fontWeight: FontWeight.w800, color: p.text, fontSize: 13)),
+      if (done) ...[const SizedBox(width: 6), Text('done', style: TextStyle(fontSize: 10.5, color: c, fontWeight: FontWeight.w700))],
+    ]);
+  }
+}
+
+/// Big selectable option card for Live Wallpaper / Charging Animation.
+class _VideoTypeOption extends StatefulWidget {
+  const _VideoTypeOption({required this.meta, required this.selected, required this.enabled, required this.desc, required this.chips, required this.onTap});
+  final VideoTypeMeta meta;
+  final bool selected, enabled;
+  final String desc;
+  final List<String> chips;
+  final VoidCallback onTap;
+
+  @override
+  State<_VideoTypeOption> createState() => _VideoTypeOptionState();
+}
+
+class _VideoTypeOptionState extends State<_VideoTypeOption> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.pal;
+    final on = widget.selected;
+    return MouseRegion(
+      cursor: widget.enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        onTap: widget.enabled ? widget.onTap : null,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            gradient: on ? LinearGradient(colors: [p.primary.withValues(alpha: p.isDark ? 0.22 : 0.14), p.accent.withValues(alpha: p.isDark ? 0.12 : 0.08)], begin: Alignment.topLeft, end: Alignment.bottomRight) : null,
+            color: on ? null : p.surfaceHover.withValues(alpha: _hover ? 0.9 : 0.55),
+            borderRadius: BorderRadius.circular(p.radiusSm + 2),
+            border: Border.all(color: on ? p.primary : (_hover ? p.primary.withValues(alpha: 0.5) : p.border), width: on ? 1.6 : 1),
+            boxShadow: on ? [BoxShadow(color: p.primary.withValues(alpha: 0.22), blurRadius: 18, offset: const Offset(0, 6))] : null,
+          ),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                gradient: on ? p.primaryGradient : null,
+                color: on ? null : p.tintChip,
+                borderRadius: BorderRadius.circular(13),
+                boxShadow: on ? [BoxShadow(color: p.primary.withValues(alpha: 0.4), blurRadius: 14, offset: const Offset(0, 5))] : null,
+              ),
+              alignment: Alignment.center,
+              child: Fa(widget.meta.icon, size: 17, color: on ? p.onPrimary : p.muted),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(children: [
+                  Expanded(child: Text(widget.meta.label, style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13.5, color: p.text))),
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 160),
+                    width: 18,
+                    height: 18,
+                    decoration: BoxDecoration(shape: BoxShape.circle, color: on ? p.primary : Colors.transparent, border: Border.all(color: on ? p.primary : p.muted.withValues(alpha: 0.6), width: 1.6)),
+                    child: on ? Fa('fa-check', size: 9, color: p.onPrimary) : null,
                   ),
-                  clipBehavior: Clip.antiAlias,
-                  child: Stack(fit: StackFit.expand, children: [
-                    Image.memory(_frames[i], fit: BoxFit.cover),
-                    if (identical(_thumb, _frames[i])) Positioned(right: 6, top: 6, child: Container(padding: const EdgeInsets.all(4), decoration: BoxDecoration(color: p.primary, shape: BoxShape.circle), child: Fa('fa-check', size: 10, color: p.onPrimary))),
-                  ]),
+                ]),
+                const SizedBox(height: 3),
+                Text(widget.desc, style: TextStyle(fontSize: 11.5, color: p.muted, height: 1.35)),
+                const SizedBox(height: 8),
+                Wrap(spacing: 5, runSpacing: 5, children: [
+                  for (final c in widget.chips)
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                      decoration: BoxDecoration(color: on ? p.primary.withValues(alpha: 0.16) : p.tintChip, borderRadius: BorderRadius.circular(6)),
+                      child: Text(c, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: on ? p.text : p.muted, letterSpacing: 0.2)),
+                    ),
+                ]),
+              ]),
+            ),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+/// Selected video row: cover preview, name, size, replace / remove.
+class _VideoFileTile extends StatelessWidget {
+  const _VideoFileTile({required this.file, required this.meta, required this.thumb, required this.busy, required this.onReplace, required this.onRemove});
+  final LocalFile file;
+  final VideoTypeMeta meta;
+  final Uint8List? thumb;
+  final bool busy;
+  final VoidCallback? onReplace, onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.pal;
+    final okSize = file.size <= kVideoMaxBytes;
+    return Container(
+      constraints: const BoxConstraints(minHeight: 120),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: p.surfaceHover.withValues(alpha: 0.55),
+        borderRadius: BorderRadius.circular(p.radiusMd),
+        border: Border.all(color: p.primary.withValues(alpha: 0.5), width: 1.4),
+      ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+        Container(
+          width: 64,
+          height: 96,
+          decoration: BoxDecoration(color: Colors.black, borderRadius: BorderRadius.circular(10), border: Border.all(color: p.border)),
+          clipBehavior: Clip.antiAlias,
+          child: thumb != null
+              ? Image.memory(thumb!, fit: BoxFit.cover, gaplessPlayback: true)
+              : Center(child: busy ? SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: p.primary)) : Fa('fa-file-video', size: 20, color: Colors.white.withValues(alpha: 0.6))),
+        ),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+            Row(children: [
+              Pill(meta.short, icon: meta.icon, small: true, color: p.primary, fg: p.onPrimary),
+              const SizedBox(width: 8),
+              Pill(file.name.split('.').last.toUpperCase(), small: true, color: p.tintChip, fg: p.text),
+            ]),
+            const SizedBox(height: 8),
+            Text(file.name, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13.5, color: p.text)),
+            const SizedBox(height: 4),
+            Row(children: [
+              Fa(okSize ? 'fa-circle-check' : 'fa-triangle-exclamation', size: 11, color: okSize ? p.ok : p.danger),
+              const SizedBox(width: 6),
+              Text('${formatBytes(file.size)} of ${formatBytes(kVideoMaxBytes)} allowed', style: TextStyle(fontSize: 11.5, color: p.muted)),
+            ]),
+            const SizedBox(height: 10),
+            Wrap(spacing: 8, runSpacing: 6, children: [
+              ZButton('Replace video', icon: 'fa-rotate', small: true, kind: ZBtnKind.ghost, onPressed: onReplace),
+              ZButton('Remove', icon: 'fa-xmark', small: true, kind: ZBtnKind.ghost, onPressed: onRemove),
+            ]),
+          ]),
+        ),
+      ]),
+    );
+  }
+}
+
+/// Five-frame filmstrip with dashed placeholders while empty / capturing.
+class _FrameStrip extends StatelessWidget {
+  const _FrameStrip({required this.frames, required this.selected, required this.capturing, required this.onPick});
+  final List<Uint8List> frames;
+  final int selected;
+  final bool capturing;
+  final ValueChanged<int>? onPick;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.pal;
+    return LayoutBuilder(builder: (context, c) {
+      final count = frames.isEmpty ? 5 : frames.length;
+      const gap = 10.0;
+      final maxW = ((c.maxWidth - gap * (count - 1)) / count).clamp(70.0, 118.0);
+      final w = maxW.toDouble();
+      final h = w * 16 / 9;
+      return Wrap(spacing: gap, runSpacing: gap, children: [
+        for (var i = 0; i < count; i++)
+          if (frames.isEmpty)
+            _FramePlaceholder(index: i, width: w, height: h, capturing: capturing)
+          else
+            _FrameThumb(bytes: frames[i], index: i, width: w, height: h, selected: i == selected, onTap: onPick == null ? null : () => onPick!(i)),
+      ]);
+    });
+  }
+}
+
+class _FramePlaceholder extends StatelessWidget {
+  const _FramePlaceholder({required this.index, required this.width, required this.height, required this.capturing});
+  final int index;
+  final double width, height;
+  final bool capturing;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.pal;
+    return Container(
+      width: width,
+      height: height,
+      decoration: BoxDecoration(
+        color: p.surfaceHover.withValues(alpha: 0.35),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: capturing ? p.primary.withValues(alpha: 0.6) : p.border, width: 1.2),
+      ),
+      child: Stack(fit: StackFit.expand, children: [
+        if (capturing)
+          _Shimmer(delay: index * 120)
+        else
+          Center(
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Fa('fa-image', size: 16, color: p.muted.withValues(alpha: 0.5)),
+              const SizedBox(height: 6),
+              Text('Frame ${index + 1}', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: p.muted.withValues(alpha: 0.7))),
+            ]),
+          ),
+        Positioned(left: 6, top: 6, child: _FrameNo(n: index + 1, color: p.muted.withValues(alpha: 0.55))),
+      ]),
+    );
+  }
+}
+
+class _FrameThumb extends StatefulWidget {
+  const _FrameThumb({required this.bytes, required this.index, required this.width, required this.height, required this.selected, required this.onTap});
+  final Uint8List bytes;
+  final int index;
+  final double width, height;
+  final bool selected;
+  final VoidCallback? onTap;
+
+  @override
+  State<_FrameThumb> createState() => _FrameThumbState();
+}
+
+class _FrameThumbState extends State<_FrameThumb> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.pal;
+    final on = widget.selected;
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedScale(
+          scale: _hover && !on ? 1.04 : 1,
+          duration: const Duration(milliseconds: 140),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 160),
+            width: widget.width,
+            height: widget.height,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: on ? p.primary : (_hover ? p.primary.withValues(alpha: 0.6) : p.border), width: on ? 3 : 1),
+              boxShadow: on ? [BoxShadow(color: p.primary.withValues(alpha: 0.4), blurRadius: 18, offset: const Offset(0, 6))] : null,
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: Stack(fit: StackFit.expand, children: [
+              Image.memory(widget.bytes, fit: BoxFit.cover, gaplessPlayback: true),
+              if (!on) Positioned.fill(child: ColoredBox(color: Colors.black.withValues(alpha: _hover ? 0.05 : 0.25))),
+              Positioned(left: 6, top: 6, child: _FrameNo(n: widget.index + 1, color: Colors.white, dark: true)),
+              if (on)
+                Positioned(
+                  right: 6,
+                  top: 6,
+                  child: Container(padding: const EdgeInsets.all(5), decoration: BoxDecoration(color: p.primary, shape: BoxShape.circle, boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.4), blurRadius: 6)]), child: Fa('fa-check', size: 9, color: p.onPrimary)),
+                ),
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(vertical: 5),
+                  decoration: BoxDecoration(gradient: LinearGradient(colors: [Colors.transparent, Colors.black.withValues(alpha: 0.7)], begin: Alignment.topCenter, end: Alignment.bottomCenter)),
+                  alignment: Alignment.center,
+                  child: Text(on ? 'COVER' : 'Use as cover', style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.w900, letterSpacing: 0.6, color: on ? p.primaryLight : Colors.white.withValues(alpha: 0.9))),
                 ),
               ),
-          ]),
-        const SizedBox(height: 12),
-        Wrap(crossAxisAlignment: WrapCrossAlignment.center, spacing: 12, runSpacing: 8, children: [
-          ZButton('Queue Video', icon: 'fa-cloud-upload-alt', busy: _busy, onPressed: _video != null && _thumb != null && !_busy ? _submit : null),
-          if (_frames.isNotEmpty) Text(_status, style: TextStyle(fontSize: 12.5, color: p.muted, fontWeight: FontWeight.w600)),
-        ]),
-      ]),
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _FrameNo extends StatelessWidget {
+  const _FrameNo({required this.n, required this.color, this.dark = false});
+  final int n;
+  final Color color;
+  final bool dark;
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(color: dark ? Colors.black.withValues(alpha: 0.55) : Colors.transparent, borderRadius: BorderRadius.circular(6)),
+        child: Text('$n', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: color)),
+      );
+}
+
+/// Soft moving highlight used inside placeholders while frames are captured.
+class _Shimmer extends StatefulWidget {
+  const _Shimmer({required this.delay});
+  final int delay;
+  @override
+  State<_Shimmer> createState() => _ShimmerState();
+}
+
+class _ShimmerState extends State<_Shimmer> with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 1400));
+
+  @override
+  void initState() {
+    super.initState();
+    Future<void>.delayed(Duration(milliseconds: widget.delay), () {
+      if (mounted) _c.repeat();
+    });
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.pal;
+    return AnimatedBuilder(
+      animation: _c,
+      builder: (_, __) => DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment(-1 + _c.value * 3, -1),
+            end: Alignment(_c.value * 3, 1),
+            colors: [Colors.transparent, p.primary.withValues(alpha: 0.28), Colors.transparent],
+          ),
+        ),
+      ),
     );
   }
 }

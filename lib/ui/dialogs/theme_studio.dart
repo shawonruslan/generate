@@ -51,6 +51,7 @@ class _ThemeDrawerState extends State<_ThemeDrawer> {
   String _status = '';
   String _statusKind = '';
   bool _saving = false;
+  String _presetFilter = 'all'; // v27.12: all | dark | light
 
   @override
   void initState() {
@@ -303,43 +304,147 @@ class _ThemeDrawerState extends State<_ThemeDrawer> {
 
   Widget _presets(ZedgePalette p) {
     final cur = _presetKey;
-    return AutoGrid(
-      minTile: 120,
-      gap: 8,
-      maxCols: 3,
-      minCols: 2,
-      children: kThemePresets.map((pr) {
-        final on = cur == pr.key;
-        return InkWell(
-          onTap: () {
-            _draft.applyPreset(pr);
+    final list = kThemePresets.where((pr) => _presetFilter == 'all' || pr.mode == _presetFilter).toList();
+    final darkN = kThemePresets.where((pr) => pr.isDark).length;
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Row(children: [
+        Expanded(
+          child: Segmented<String>(
+            small: true,
+            options: [('all', 'All ${kThemePresets.length}'), ('dark', 'Dark $darkN'), ('light', 'Light ${kThemePresets.length - darkN}')],
+            value: _presetFilter,
+            onChanged: (v) => setState(() => _presetFilter = v),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Tooltip(
+          message: 'Surprise me - pick a random preset',
+          child: ZIconButton('fa-shuffle', size: 30, onPressed: () {
+            final pool = list.where((pr) => pr.key != cur).toList();
+            if (pool.isEmpty) return;
+            _draft.applyPreset(pool[DateTime.now().millisecondsSinceEpoch % pool.length]);
             _preview();
-          },
-          borderRadius: BorderRadius.circular(12),
-          child: Container(
-            padding: const EdgeInsets.all(10),
+          }),
+        ),
+      ]),
+      const SizedBox(height: 10),
+      AutoGrid(
+        minTile: 132,
+        gap: 10,
+        maxCols: 3,
+        minCols: 2,
+        children: list.map((pr) => _PresetTile(preset: pr, on: cur == pr.key, ring: p.primary, onTap: () {
+              _draft.applyPreset(pr);
+              _preview();
+            })).toList(),
+      ),
+    ]);
+  }
+}
+
+/// v27.12 preset tile - a tiny live "mock UI" (header, sidebar, card, button)
+/// painted with the preset's own colours so you see the mood before applying.
+class _PresetTile extends StatefulWidget {
+  const _PresetTile({required this.preset, required this.on, required this.ring, required this.onTap});
+  final ThemePreset preset;
+  final bool on;
+  final Color ring;
+  final VoidCallback onTap;
+
+  @override
+  State<_PresetTile> createState() => _PresetTileState();
+}
+
+class _PresetTileState extends State<_PresetTile> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final pr = widget.preset;
+    final primary = colorFromHex(pr.primary), accent = colorFromHex(pr.accent), bg = colorFromHex(pr.bg), surface = colorFromHex(pr.surface), text = colorFromHex(pr.text);
+    final dark = pr.isDark;
+    final on = widget.on;
+    final line = text.withValues(alpha: dark ? 0.16 : 0.12);
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedScale(
+          scale: _hover && !on ? 1.025 : 1,
+          duration: const Duration(milliseconds: 140),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 160),
             decoration: BoxDecoration(
-              color: colorFromHex(pr.surface),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: on ? p.primary : p.border, width: on ? 2 : 1),
-              boxShadow: on ? [BoxShadow(color: p.primary.withValues(alpha: 0.35), blurRadius: 14)] : null,
+              color: bg,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: on ? widget.ring : (_hover ? primary.withValues(alpha: 0.7) : line), width: on ? 2 : 1),
+              boxShadow: [
+                if (on) BoxShadow(color: widget.ring.withValues(alpha: 0.35), blurRadius: 16, offset: const Offset(0, 4)),
+                if (_hover && !on) BoxShadow(color: primary.withValues(alpha: 0.25), blurRadius: 14, offset: const Offset(0, 4)),
+              ],
             ),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-              Row(children: [
-                for (final h in [pr.primary, pr.accent, pr.bg, pr.text])
-                  Container(width: 14, height: 14, margin: const EdgeInsets.only(right: 4), decoration: BoxDecoration(color: colorFromHex(h), shape: BoxShape.circle, border: Border.all(color: Colors.white.withValues(alpha: 0.25)))),
-                const Spacer(),
-                if (on) Fa('fa-check', size: 11, color: colorFromHex(pr.text)),
-              ]),
-              const SizedBox(height: 8),
-              Text(pr.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: colorFromHex(pr.text))),
-              Text(pr.mode, style: TextStyle(fontSize: 10.5, color: colorFromHex(pr.text).withValues(alpha: 0.6))),
+            clipBehavior: Clip.antiAlias,
+            child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [
+              // mini mock UI
+              SizedBox(
+                height: 64,
+                child: Stack(children: [
+                  // header gradient
+                  Positioned(left: 0, right: 0, top: 0, height: 13, child: DecoratedBox(decoration: BoxDecoration(gradient: LinearGradient(colors: [primary, accent])))),
+                  // sidebar
+                  Positioned(left: 0, top: 13, bottom: 0, width: 18, child: ColoredBox(color: surface)),
+                  Positioned(left: 4, top: 19, child: Container(width: 10, height: 3, decoration: BoxDecoration(color: primary, borderRadius: BorderRadius.circular(2)))),
+                  Positioned(left: 4, top: 25, child: Container(width: 10, height: 3, decoration: BoxDecoration(color: line, borderRadius: BorderRadius.circular(2)))),
+                  Positioned(left: 4, top: 31, child: Container(width: 10, height: 3, decoration: BoxDecoration(color: line, borderRadius: BorderRadius.circular(2)))),
+                  // two cards
+                  Positioned(left: 24, top: 19, right: 6, height: 20, child: Container(decoration: BoxDecoration(color: surface, borderRadius: BorderRadius.circular(4), border: Border.all(color: line, width: 0.8)),
+                      padding: const EdgeInsets.fromLTRB(5, 4, 5, 4),
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Container(width: 26, height: 3, decoration: BoxDecoration(color: text.withValues(alpha: 0.8), borderRadius: BorderRadius.circular(2))),
+                        const SizedBox(height: 3),
+                        Container(width: 40, height: 3, decoration: BoxDecoration(color: text.withValues(alpha: 0.35), borderRadius: BorderRadius.circular(2))),
+                      ]))),
+                  Positioned(left: 24, top: 43, height: 14, width: 30, child: Container(decoration: BoxDecoration(gradient: LinearGradient(colors: [primary, accent]), borderRadius: BorderRadius.circular(7)))),
+                  Positioned(left: 58, top: 43, height: 14, right: 6, child: Container(decoration: BoxDecoration(color: surface, borderRadius: BorderRadius.circular(4), border: Border.all(color: line, width: 0.8)))),
+                  // accent glow dot
+                  Positioned(right: 8, top: 22, child: Container(width: 9, height: 9, decoration: BoxDecoration(color: accent, shape: BoxShape.circle, boxShadow: [BoxShadow(color: accent.withValues(alpha: 0.7), blurRadius: 8)]))),
+                  // mode badge
+                  Positioned(
+                    right: 5,
+                    top: 2,
+                    child: Container(
+                      width: 9,
+                      height: 9,
+                      decoration: BoxDecoration(color: Colors.black.withValues(alpha: dark ? 0.55 : 0.25), shape: BoxShape.circle),
+                      alignment: Alignment.center,
+                      child: Fa(dark ? 'fa-solid-moon' : 'fa-solid-sun', size: 5.5, color: Colors.white),
+                    ),
+                  ),
+                  if (on)
+                    Positioned(
+                      right: 6,
+                      bottom: 6,
+                      child: Container(width: 16, height: 16, decoration: BoxDecoration(color: primary, shape: BoxShape.circle, boxShadow: [BoxShadow(color: primary.withValues(alpha: 0.5), blurRadius: 8)]), alignment: Alignment.center, child: Fa('fa-check', size: 8, color: _fgFor(primary))),
+                    ),
+                ]),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(9, 6, 9, 8),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(pr.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: text)),
+                  Text(pr.vibe.isNotEmpty ? pr.vibe : (dark ? 'Dark mode' : 'Light mode'), maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 10, color: text.withValues(alpha: 0.6))),
+                ]),
+              ),
             ]),
           ),
-        );
-      }).toList(),
+        ),
+      ),
     );
   }
+
+  static Color _fgFor(Color c) => c.computeLuminance() > 0.5 ? const Color(0xff111111) : Colors.white;
 }
 
 /// `<input type="color"> + <input type="text">` row.

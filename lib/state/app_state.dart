@@ -274,6 +274,21 @@ class AppState extends ChangeNotifier {
         gateHealth[key] = v is Map ? GateHealth(Map<String, dynamic>.from(v)) : null;
         notifyListeners();
       }, onError: (_) {}));
+      // v27.11 missed-slot recovery alerts from the gate / bot -> notification center (+ toast)
+      _globalSubs.add(db.stream('dashboardSettings/alerts').listen((v) async {
+        final n = await notifications.addRemoteAlerts(v, accountLabel(key));
+        if (n > 0 && notifications.items.isNotEmpty) {
+          // toast only (the notification entry itself was just added by addRemoteAlerts)
+          final latest = notifications.items.first;
+          final t = ToastMsg(latest.text, latest.kind == 'ok' ? 'ok' : latest.kind == 'err' ? 'err' : 'warn');
+          toasts.add(t);
+          Timer(const Duration(milliseconds: 6000), () {
+            toasts.removeWhere((x) => x.id == t.id);
+            notifyListeners();
+          });
+        }
+        notifyListeners();
+      }, onError: (_) {}));
       _globalSubs.add(db.stream(kVpnPath).listen((v) {
         vpnStates[key] = VpnState(v is Map ? Map<String, dynamic>.from(v) : null);
         vpnLive = true;

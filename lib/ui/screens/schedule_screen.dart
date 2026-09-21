@@ -175,7 +175,7 @@ class _SchedCardState extends State<_SchedCard> {
     final runs = g?.runsFor(dhakaTodayKey()) ?? const <int, Map<String, dynamic>>{};
     final runTxt = runs.isEmpty
         ? 'none yet'
-        : (runs.keys.toList()..sort()).map((w) => 'W${w + 1} ${runs[w]!['dhaka'] ?? ''}${runs[w]!['catchUp'] == true ? ' (catch-up)' : ''}').join(' · ');
+        : (runs.keys.toList()..sort()).map((w) => 'W${w + 1} ${runs[w]!['dhaka'] ?? ''}${gateRunState(runs[w])}').join(' · ');
     final decision = g?.lastDecision ?? '-';
     final err = validateSlots(draft);
     final liveHours = live.map((x) => x.hour).toList();
@@ -359,7 +359,7 @@ class _VarietyCardState extends State<_VarietyCard> {
             borderRadius: BorderRadius.circular(8),
             child: Row(children: [
               Checkbox(value: d.strict, onChanged: (v) => edit((x) => x.strict = v ?? false)),
-              Expanded(child: Text('Strict: never repeat a type the same day (wait instead of falling back)', style: TextStyle(fontSize: 12, color: p.text))),
+              Expanded(child: Text('Strict: prefer a different type for every slot (repeats only when no other type has stock - a slot is never left empty)', style: TextStyle(fontSize: 12, color: p.text))),
             ]),
           ),
           const SizedBox(height: 6),
@@ -766,7 +766,7 @@ class _DayColumnState extends State<_DayColumn> {
               const SizedBox(height: 6),
               Text(
                 d.mixMode
-                    ? 'Click to pin a file · mix mode: no queued file of ${d.mixStrict ? 'an unused type' : 'any type'}'
+                    ? 'Click to pin a file · mix mode: no queued file of any type'
                     : 'Click to pin a file${noneHave ? ' · no type has 3 files' : ''}',
                 style: TextStyle(fontSize: 11.5, color: p.muted),
               ),

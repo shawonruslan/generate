@@ -134,8 +134,9 @@ PlannerResult buildPlan({
 
   // v27.10 MIX MODE - mirrors zedgeN.yml `variety` block: enabled -> each slot of a day takes the first
   // type of the daily rotated order that has NOT been uploaded that day AND has >= 1 queued file (no
-  // "need 3" rule). strict=true -> when every unused type is empty the slot waits (MIX_MODE_WAIT);
-  // strict=false -> falls back to a type already used that day. Pinned items always win and never
+  // "need 3" rule). strict=true -> a different type is preferred for every slot; strict=false -> falls back
+  // to a type already used that day. v27.11: in BOTH modes a slot whose wanted types have no stock is gap-filled
+  // with the least-used type that still has files (never an empty slot). Pinned items always win and never
   // count as a used type (same as the bot). Read-only: nothing here is written back to Firebase.
   final vc = variety;
   final mix = vc != null && vc.enabled;
@@ -179,6 +180,21 @@ PlannerResult buildPlan({
           if (remainingOf(bucketOf(t)) > 0) {
             pick = t;
             break;
+          }
+        }
+        // v27.11 GAP FILL (mirrors bot.js): the wanted type(s) have no stock -> repeat the least-used type
+        // that still has stock instead of leaving the slot empty (strict mode too: 3 slots = 3 uploads).
+        if (pick == null) {
+          final ranked = mixOrder.toList()
+            ..sort((a, b) {
+              final ca = mixUsed.where((u) => u == a).length, cb = mixUsed.where((u) => u == b).length;
+              return ca != cb ? ca.compareTo(cb) : mixOrder.indexOf(a).compareTo(mixOrder.indexOf(b));
+            });
+          for (final t in ranked) {
+            if (remainingOf(bucketOf(t)) > 0) {
+              pick = t;
+              break;
+            }
           }
         }
         if (pick != null) {
@@ -309,32 +325,35 @@ List<OverviewCard> buildOverview({
     final isActive = key == activeProject;
     final wins = schedule.windowsFor(key);
     final gr = gateHealth[key]?.runsFor(todayKey) ?? const <int, Map<String, dynamic>>{};
-    final gDone = gr.length;
+    final gDone = gr.values.where((e) => gateRunStatus(e) == 'done').length;   // v27.11: only REAL uploads count
     final upDone = isActive ? (gDone > uploadedToday ? gDone : uploadedToday) : gDone;
     final slots = <OverviewSlot>[];
     for (var w = 0; w < wins.length; w++) {
       final r = schedule.predictRun(todayKey, w, key);
       if (r == null) continue;
       final gRun = gr[w];
-      final done = gRun != null || (isActive && gDone == 0 && w < uploadedToday);
-      final passed = !done && nowMs > r.windowEndMs;
-      final due = !done && !passed && nowMs >= r.startMs;
+      final gSt = gateRunStatus(gRun);
+      final done = gSt == 'done' || (isActive && gDone == 0 && gRun == null && w < uploadedToday);
+      final missed = gSt == 'failed';     // v27.11: "Missed · will retry …"
+      final running = gSt == 'running';
+      final passed = !done && !missed && !running && nowMs > r.windowEndMs;
+      final due = (!done && !passed && nowMs >= r.startMs) || missed || running;
       final idx = w - upDone;
       final item = (isActive && idx >= 0 && today != null && idx < today.slots.length) ? today.slots[idx] : null;
       final pr = (isActive && idx >= 0 && today != null && idx < today.runs.length) ? today.runs[idx] : null;
-      var detail = done
+      var detail = (done || missed || running)
           ? gateRunLabel(gRun)
           : passed
               ? 'No run recorded in window'
               : due
                   ? 'Awaiting run confirmation'
                   : 'Scheduled · Dhaka time';
-      if (!done && isActive && item != null) {
+      if (!done && !missed && !running && isActive && item != null) {
         detail = '${item.displayTitle}${pr != null ? ' · ${pr.profileLabel}' : ''}';
-      } else if (!done && isActive && pr != null && !pr.overflow) {
+      } else if (!done && !missed && !running && isActive && pr != null && !pr.overflow) {
         detail = 'Empty slot · ${pr.profileLabel}';
       }
-      slots.add(OverviewSlot(run: r, done: done, passed: passed, due: due, detail: detail, gateRun: gRun));
+      slots.add(OverviewSlot(run: r, done: done, passed: passed, due: due, detail: detail, gateRun: gRun, missed: missed, running: running));
     }
     cards.add(OverviewCard(key: key, accountIndex: accountIndex, isActive: isActive, slots: slots));
   }

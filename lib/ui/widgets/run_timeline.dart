@@ -100,9 +100,10 @@ class _OverviewCardView extends StatelessWidget {
 
   Widget _row(BuildContext context, OverviewSlot s, int index, bool isNext) {
     final p = context.pal;
-    final state = s.done ? 'done' : (s.passed ? 'passed' : (s.due ? 'due' : (isNext ? 'next' : 'later')));
-    final flag = const {'done': 'DONE', 'passed': 'CLOSED', 'due': 'DUE', 'next': 'NEXT', 'later': 'LATER'}[state]!;
-    final color = switch (state) { 'done' => p.ok, 'passed' => p.muted, 'due' => p.warn, 'next' => p.primary, _ => p.muted };
+    // v27.11: MISSED (run failed / never happened -> gate retries) and RUNNING states from the real run marker
+    final state = s.done ? 'done' : (s.missed ? 'missed' : (s.running ? 'running' : (s.passed ? 'passed' : (s.due ? 'due' : (isNext ? 'next' : 'later')))));
+    final flag = const {'done': 'DONE', 'missed': 'MISSED · RETRY', 'running': 'RUNNING', 'passed': 'CLOSED', 'due': 'DUE', 'next': 'NEXT', 'later': 'LATER'}[state]!;
+    final color = switch (state) { 'done' => p.ok, 'missed' => p.danger, 'running' => p.primary, 'passed' => p.muted, 'due' => p.warn, 'next' => p.primary, _ => p.muted };
     return Container(
       margin: const EdgeInsets.only(top: 6),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -117,7 +118,7 @@ class _OverviewCardView extends StatelessWidget {
           height: 24,
           alignment: Alignment.center,
           decoration: BoxDecoration(color: color.withValues(alpha: 0.18), borderRadius: BorderRadius.circular(7)),
-          child: Text(s.done ? '✓' : (index + 1).toString().padLeft(2, '0'), style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: color)),
+          child: Text(s.done ? '✓' : (s.missed ? '!' : (index + 1).toString().padLeft(2, '0')), style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: color)),
         ),
         const SizedBox(width: 10),
         Expanded(

@@ -18,6 +18,7 @@ import '../../state/nav.dart';
 import '../widgets/common.dart';
 import '../widgets/fa.dart';
 import '../widgets/phone_mockup.dart';
+import '../widgets/phone_scenes.dart';
 import '../widgets/queue_card.dart';
 import '../widgets/responsive.dart';
 import 'purge_overlay.dart';
@@ -117,8 +118,12 @@ class _AssetDetailsPageState extends State<AssetDetailsPage> {
   bool _previewMode = false;
   String _pvBg = 'aurora';
   double _pvZoom = 120;
-  bool _lockOn = false;
   bool _fullscreen = false;
+  // v27.12 realistic scenes (lock / home / app / call / message) + auto tour
+  PhoneScene _scene = PhoneScene.plain;
+  int _replayTick = 0;
+  Timer? _tourTimer;
+  static const List<PhoneScene> _kTour = [PhoneScene.lock, PhoneScene.home, PhoneScene.app, PhoneScene.call, PhoneScene.notify, PhoneScene.plain];
 
   bool get _presPlaying => _presTimer != null;
 
@@ -200,6 +205,7 @@ class _AssetDetailsPageState extends State<AssetDetailsPage> {
   @override
   void dispose() {
     _presTimer?.cancel();
+    _tourTimer?.cancel();
     _copyReset?.cancel();
     for (final s in _subs) {
       s.cancel();
@@ -370,10 +376,76 @@ class _AssetDetailsPageState extends State<AssetDetailsPage> {
 
   void _exitPreview() {
     if (_fullscreen) _toggleFullscreen();
+    _stopTour();
+    if (sceneRings(_scene)) _player?.pause();
     setState(() {
       _previewMode = false;
-      _lockOn = false;
+      _scene = PhoneScene.plain;
     });
+  }
+
+  // ---------------------------------------------------------- v27.12 scenes
+  /// Switch the phone scene. Ringtone items start ringing on the call /
+  /// message scenes and stop when another scene is chosen.
+  void _setScene(PhoneScene s, {bool fromTour = false}) {
+    if (!fromTour) _stopTour();
+    final rt = _snapshot.isMp3 ? _player : null;
+    if (rt != null) {
+      if (sceneRings(s)) {
+        rt.seek(Duration.zero);
+        rt.play();
+      } else if (sceneRings(_scene)) {
+        rt.pause();
+      }
+    }
+    setState(() {
+      _scene = s;
+      _replayTick++;
+    });
+  }
+
+  /// Ring / show the notification again.
+  void _replayScene() {
+    final rt = _snapshot.isMp3 ? _player : null;
+    if (rt != null && sceneRings(_scene)) {
+      rt.seek(Duration.zero);
+      rt.play();
+    }
+    setState(() => _replayTick++);
+  }
+
+  void _onCallAction(bool accepted) {
+    // accept -> the call is "connected" (ringtone stops); decline -> call ended (ringtone stops)
+    _player?.pause();
+    _stopTour();
+  }
+
+  bool get _touring => _tourTimer != null;
+
+  void _toggleTour() {
+    if (_touring) {
+      _stopTour();
+      setState(() {});
+      return;
+    }
+    var i = _kTour.indexOf(_scene);
+    _setScene(_kTour[(i + 1) % _kTour.length], fromTour: true);
+    _tourTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (!mounted) return;
+      i = _kTour.indexOf(_scene);
+      _setScene(_kTour[(i + 1) % _kTour.length], fromTour: true);
+    });
+    setState(() {});
+  }
+
+  void _stopTour() {
+    _tourTimer?.cancel();
+    _tourTimer = null;
+  }
+
+  String _sceneTypeLabel(QueueItem item) {
+    if (item.isMp3) return 'Ringtone';
+    return kSetTypeMeta[item.contentType]?.label ?? kVideoTypeMeta[item.contentType]?.label ?? 'Wallpaper';
   }
 
   // ------------------------------------------------------------- build
@@ -516,7 +588,26 @@ class _AssetDetailsPageState extends State<AssetDetailsPage> {
     final app = context.appWatch;
     final p = app.palette;
     return Column(mainAxisSize: MainAxisSize.min, children: [
-      PhoneMockup(deviceId: app.previewDeviceId, width: phoneWidth, showLockClock: _lockOn && forPreviewPage, child: _buildScreen(context, item)),
+      PhoneMockup(
+        deviceId: app.previewDeviceId,
+        width: phoneWidth,
+        hideStatusTime: forPreviewPage && sceneHidesStatusTime(_scene),
+        child: forPreviewPage
+            ? PhoneSceneView(
+                scene: _scene,
+                media: _buildScreen(context, item),
+                deviceId: app.previewDeviceId,
+                title: item.displayTitleOrId,
+                typeLabel: _sceneTypeLabel(item),
+                tags: item.tagList,
+                creator: app.accountLabel(app.activeProject),
+                isRingtone: item.isMp3,
+                playing: _playing,
+                replayTick: _replayTick,
+                onCallAction: _onCallAction,
+              )
+            : _buildScreen(context, item),
+      ),
       const SizedBox(height: 14),
       DeviceChooser(active: app.previewDeviceId, onChanged: app.setPreviewDevice),
       if (_frames.length > 1) ...[
@@ -855,7 +946,9 @@ class _AssetDetailsPageState extends State<AssetDetailsPage> {
           child: Slider(value: _pvZoom, min: 80, max: 180, divisions: 20, label: '${_pvZoom.round()}%', onChanged: (v) => setState(() => _pvZoom = v)),
         ),
       ]),
-      ZButton('Lock screen', icon: 'fa-lock', small: true, kind: _lockOn ? ZBtnKind.primary : ZBtnKind.ghost, onPressed: () => setState(() => _lockOn = !_lockOn)),
+      SceneChooser(active: _scene, onChanged: _setScene, compact: width < 1500),
+      ZButton('Replay', icon: 'fa-rotate-right', small: true, kind: ZBtnKind.ghost, tooltip: 'Ring / show the notification again', onPressed: sceneRings(_scene) ? _replayScene : null),
+      ZButton(_touring ? 'Stop tour' : 'Tour', icon: _touring ? 'fa-pause' : 'fa-play', small: true, kind: _touring ? ZBtnKind.primary : ZBtnKind.ghost, tooltip: 'Auto-cycle lock → home → app → call → message every 5 s', onPressed: _toggleTour),
       ZButton(_fullscreen ? 'Exit fullscreen' : 'Fullscreen', icon: _fullscreen ? 'fa-compress' : 'fa-expand', small: true, kind: ZBtnKind.ghost, onPressed: _toggleFullscreen),
     ]);
 
@@ -908,6 +1001,8 @@ class _AssetDetailsPageState extends State<AssetDetailsPage> {
                     const SizedBox(height: 12),
                     _buildMetaInfo(context, item, app),
                     const SizedBox(height: 14),
+                    _SceneCard(scene: _scene, isRingtone: item.isMp3, onChanged: _setScene),
+                    const SizedBox(height: 14),
                     Container(
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(color: p.tintSoft, borderRadius: BorderRadius.circular(p.radiusSm), border: Border.all(color: p.border)),
@@ -918,9 +1013,11 @@ class _AssetDetailsPageState extends State<AssetDetailsPage> {
                           child: Text.rich(TextSpan(style: TextStyle(fontSize: 12, color: p.muted, height: 1.45), children: const [
                             TextSpan(text: 'Switch iOS / Android frame under the phone, drag '),
                             TextSpan(text: 'Size', style: TextStyle(fontWeight: FontWeight.w800)),
-                            TextSpan(text: ', toggle '),
-                            TextSpan(text: 'Lock screen', style: TextStyle(fontWeight: FontWeight.w800)),
-                            TextSpan(text: ' for a real-device look, or go '),
+                            TextSpan(text: ', pick a '),
+                            TextSpan(text: 'scene', style: TextStyle(fontWeight: FontWeight.w800)),
+                            TextSpan(text: ' (lock screen, home screen, Zedge app, incoming call, message) or press '),
+                            TextSpan(text: 'Tour', style: TextStyle(fontWeight: FontWeight.w800)),
+                            TextSpan(text: ' to cycle through all of them, or go '),
                             TextSpan(text: 'Fullscreen', style: TextStyle(fontWeight: FontWeight.w800)),
                             TextSpan(text: ' to show a client.'),
                           ])),
@@ -938,6 +1035,69 @@ class _AssetDetailsPageState extends State<AssetDetailsPage> {
 }
 
 // =================================================================== pieces
+
+/// v27.12 - scene picker card in the preview sidebar (big buttons + hint).
+class _SceneCard extends StatelessWidget {
+  const _SceneCard({required this.scene, required this.isRingtone, required this.onChanged});
+  final PhoneScene scene;
+  final bool isRingtone;
+  final ValueChanged<PhoneScene> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.pal;
+    final cur = sceneMeta(scene);
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(color: p.tintCard, borderRadius: BorderRadius.circular(p.radiusSm), border: Border.all(color: p.border)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Fa('fa-mobile-screen-button', size: 12, color: p.primary),
+          const SizedBox(width: 8),
+          Text('Realistic scenes', style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w800, color: p.text)),
+        ]),
+        const SizedBox(height: 10),
+        AutoGrid(
+          minTile: 100,
+          gap: 6,
+          maxCols: 3,
+          minCols: 2,
+          children: kPhoneScenes.map((m) {
+            final on = m.scene == scene;
+            return InkWell(
+              onTap: () => onChanged(m.scene),
+              borderRadius: BorderRadius.circular(10),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 160),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 9),
+                decoration: BoxDecoration(
+                  gradient: on ? p.buttonGradient : null,
+                  color: on ? null : p.surfaceHover.withValues(alpha: 0.6),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: on ? Colors.transparent : p.border),
+                ),
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  Fa(m.icon, size: 13, color: on ? p.buttonFg : p.muted),
+                  const SizedBox(height: 5),
+                  Text(m.label, maxLines: 1, overflow: TextOverflow.ellipsis, textAlign: TextAlign.center, style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w800, color: on ? p.buttonFg : p.text)),
+                ]),
+              ),
+            );
+          }).toList(),
+        ),
+        const SizedBox(height: 10),
+        Text(
+          scene == PhoneScene.call && isRingtone
+              ? 'Your ringtone plays while the call rings - tap Accept / Decline on the phone to stop it.'
+              : scene == PhoneScene.notify && isRingtone
+                  ? 'The message banner slides in and your audio plays as the notification sound.'
+                  : cur.hint,
+          style: TextStyle(fontSize: 11.5, color: p.muted, height: 1.4),
+        ),
+      ]),
+    );
+  }
+}
 
 class _PageBar extends StatelessWidget {
   const _PageBar({required this.backLabel, required this.crumbs, required this.onBack, this.trailing});

@@ -30,11 +30,13 @@ const List<int> kPresSpeeds = [2000, 3000, 5000, 8000];
 /// is centred and the status bar (time · signal · wifi · battery) always sits
 /// in the safe area next to it.
 class PhoneMockup extends StatelessWidget {
-  const PhoneMockup({super.key, required this.deviceId, required this.child, this.width = 250, this.showLockClock = false});
+  const PhoneMockup({super.key, required this.deviceId, required this.child, this.width = 250, this.showLockClock = false, this.hideStatusTime = false});
   final String deviceId;
   final Widget child;
   final double width;
   final bool showLockClock;
+  /// v27.12 - hide the small status-bar clock (a scene draws its own big clock).
+  final bool hideStatusTime;
 
   @override
   Widget build(BuildContext context) {
@@ -56,7 +58,7 @@ class PhoneMockup extends StatelessWidget {
             ),
           ),
         ),
-        _StatusBar(g: g, hideTime: showLockClock),
+        _StatusBar(g: g, hideTime: showLockClock || hideStatusTime),
         if (showLockClock) _LockClock(top: g.statusTop + 44),
         if (g.cutout != null) g.cutout!,
         if (g.homeIndicator)
