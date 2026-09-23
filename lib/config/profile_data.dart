@@ -6,67 +6,67 @@
 import 'build_config.dart';
 
 /// Profile used when the app is built without `--dart-define=BUILD=...`.
-const String kDefaultProfileId = 'shawon';
+const String kDefaultProfileId = 'shimul';
 
 /// Every profile compiled into this executable.
 const List<BuildProfile> kProfiles = [
-  kProfileShawon,
+  kProfileShimul,
 ];
 
 // ---------------------------------------------------------------------------
-// shawon (shawon-vpn.zip) - 4 accounts
+// shimul (shimul-vpn.zip) - 4 accounts
 // ---------------------------------------------------------------------------
-const BuildProfile kProfileShawon = BuildProfile(
-  id: 'shawon',
-  title: 'Shawon (4 accounts)',
-  r2WorkerUrl: 'https://frosty-pine-2f7dzedge-r2-gateway.holaexplainer.workers.dev',
-  googleCalendarApiKey: 'AIzaSyAnNeYfEYF6Z41r-QBo2q8eWKaP-CBPlnc',
+const BuildProfile kProfileShimul = BuildProfile(
+  id: 'shimul',
+  title: 'Shimul (4 accounts)',
+  r2WorkerUrl: 'https://shimul.shawonhawladar.workers.dev',
+  googleCalendarApiKey: '',
   defaultUploadWindows: {
-    'zedge1': [4, 10, 16],
-    'zedge2': [5, 11, 17],
-    'zedge3': [10, 16, 20],
-    'zedge4': [11, 17, 21],
+    'zedge1': [6, 12, 18],
+    'zedge2': [7, 13, 19],
+    'zedge3': [8, 14, 22],
+    'zedge4': [9, 15, 23],
   },
   accounts: [
     FirebaseAccountConfig(
       key: 'zedge1',
-      apiKey: 'AIzaSyDwM-L754rnznedU6UIxsLmB4eyYFp7NnA',
-      authDomain: 'zedgeautomation.firebaseapp.com',
-      databaseURL: 'https://zedgeautomation-default-rtdb.firebaseio.com',
-      projectId: 'zedgeautomation',
-      storageBucket: 'zedgeautomation.firebasestorage.app',
-      messagingSenderId: '1061461206697',
-      appId: '1:1061461206697:web:2e0b1e1ebb9b58ea952bb8',
+      apiKey: 'AIzaSyBnNAwFptU9GG6M8iTzIV1ulGVxnCZTzxw',
+      authDomain: 'shimul-zedge1.firebaseapp.com',
+      databaseURL: 'https://shimul-zedge1-default-rtdb.asia-southeast1.firebasedatabase.app',
+      projectId: 'shimul-zedge1',
+      storageBucket: 'shimul-zedge1.firebasestorage.app',
+      messagingSenderId: '451307537743',
+      appId: '1:451307537743:web:37e3ad4f85c93dc4adf13a',
     ),
     FirebaseAccountConfig(
       key: 'zedge2',
-      apiKey: 'AIzaSyB0rSfo4u9mmlnl2--svGLCGh-Ta3sq1LE',
-      authDomain: 'zedge-automation-2.firebaseapp.com',
-      databaseURL: 'https://zedge-automation-2-default-rtdb.asia-southeast1.firebasedatabase.app',
-      projectId: 'zedge-automation-2',
-      storageBucket: 'zedge-automation-2.firebasestorage.app',
-      messagingSenderId: '767724772077',
-      appId: '1:767724772077:web:27131e41eb0d27209b8ae4',
+      apiKey: 'AIzaSyDNiYWqMdsoFJoHJZ-hAhfXigOl9nh778s',
+      authDomain: 'shimul-zedge-2.firebaseapp.com',
+      databaseURL: 'https://shimul-zedge-2-default-rtdb.asia-southeast1.firebasedatabase.app',
+      projectId: 'shimul-zedge-2',
+      storageBucket: 'shimul-zedge-2.firebasestorage.app',
+      messagingSenderId: '884644788118',
+      appId: '1:884644788118:web:377568ac042d5b7ba40fb7',
     ),
     FirebaseAccountConfig(
       key: 'zedge3',
-      apiKey: 'AIzaSyC5cD9PrW7lOIrXvhlYJvNRu-eUBreGV0U',
-      authDomain: 'zedge-automation-3.firebaseapp.com',
-      databaseURL: 'https://zedge-automation-3-default-rtdb.asia-southeast1.firebasedatabase.app',
-      projectId: 'zedge-automation-3',
-      storageBucket: 'zedge-automation-3.firebasestorage.app',
-      messagingSenderId: '111041866150',
-      appId: '1:111041866150:web:c20550188e06579435c767',
+      apiKey: 'AIzaSyDqo0RkYd5-xdQ704I1By2FbBoNwICJecI',
+      authDomain: 'shimul-zedge3.firebaseapp.com',
+      databaseURL: 'https://shimul-zedge3-default-rtdb.firebaseio.com',
+      projectId: 'shimul-zedge3',
+      storageBucket: 'shimul-zedge3.firebasestorage.app',
+      messagingSenderId: '370280739654',
+      appId: '1:370280739654:web:177836e8d4060f62f1eb47',
     ),
     FirebaseAccountConfig(
       key: 'zedge4',
-      apiKey: 'AIzaSyDCYMrTkFei1ZfSKbFN2tKZijaEN1nn-kk',
-      authDomain: 'zedge-4.firebaseapp.com',
-      databaseURL: 'https://zedge-4-default-rtdb.asia-southeast1.firebasedatabase.app',
-      projectId: 'zedge-4',
-      storageBucket: 'zedge-4.firebasestorage.app',
-      messagingSenderId: '269891256214',
-      appId: '1:269891256214:web:3c58fdbdd2a1d8d1e167b7',
+      apiKey: 'AIzaSyAhs54UhZtrYDz50oav1NefACpaItBPvJc',
+      authDomain: 'shimul-zedge-4.firebaseapp.com',
+      databaseURL: 'https://shimul-zedge-4-default-rtdb.firebaseio.com',
+      projectId: 'shimul-zedge-4',
+      storageBucket: 'shimul-zedge-4.firebasestorage.app',
+      messagingSenderId: '352284549595',
+      appId: '1:352284549595:web:ecce9eaf1d061b96e747fe',
     ),
   ],
 );

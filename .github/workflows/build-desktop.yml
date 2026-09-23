@@ -48,7 +48,7 @@ env:
   # font_awesome_flutter 10.x ("IconData can't be extended outside of its
   # library"). Bump this only after font_awesome_flutter publishes a fix.
   FLUTTER_VERSION: "3.35.x"
-  BUILD_PROFILE: shawon
+  BUILD_PROFILE: shimul
   FLUTTER_CHANNEL: stable
   # Set to the sub-folder that contains pubspec.yaml, or leave "auto" to let the
   # workflow find it (repo root, ./desktop or ./automation_hub_desktop).
