@@ -1,15 +1,12 @@
-# Flutter / Dart
-.dart_tool/
-.packages
-.pub-cache/
-.pub/
-build/
-.flutter-plugins
-.flutter-plugins-dependencies
-.metadata
 *.iml
+.gradle/
 .idea/
-.vscode/
+.kotlin/
+build/
+local.properties
 .DS_Store
-# generated platform runners are created by `flutter create .` in CI or locally
-# (keep them if you customised icons / entitlements)
+/captures
+.externalNativeBuild
+.cxx
+*.apk
+*.aab
