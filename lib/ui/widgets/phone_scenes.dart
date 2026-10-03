@@ -102,7 +102,7 @@ class _PhoneSceneViewState extends State<PhoneSceneView> {
         case PhoneScene.call:
           return Stack(fit: StackFit.expand, children: [
             widget.media,
-            ClipRect(child: BackdropFilter(filter: ui.ImageFilter.blur(sigmaX: 10, sigmaY: 10), child: const SizedBox.expand())),
+            ClipRect(child: LiteBackdropFilter(filter: ui.ImageFilter.blur(sigmaX: 10, sigmaY: 10), child: const SizedBox.expand())),
             _Scrim(top: 0.55, bottom: 0.72),
             _CallLayer(key: ValueKey('call-${widget.replayTick}'), u: ui_, title: widget.title, isRingtone: widget.isRingtone, playing: widget.playing, onAction: widget.onCallAction),
           ]);
@@ -273,7 +273,7 @@ class _NotifCard extends StatelessWidget {
     final r = u.sz(u.ios ? 18 : 14);
     return ClipRRect(
       borderRadius: BorderRadius.circular(r),
-      child: BackdropFilter(
+      child: LiteBackdropFilter(
         filter: ui.ImageFilter.blur(sigmaX: 16, sigmaY: 16),
         child: Container(
           padding: EdgeInsets.all(u.sz(10)),
@@ -488,7 +488,7 @@ class _HomeLayer extends StatelessWidget {
             // dock
             ClipRRect(
               borderRadius: BorderRadius.circular(u.sz(u.ios ? 26 : 30)),
-              child: BackdropFilter(
+              child: LiteBackdropFilter(
                 filter: ui.ImageFilter.blur(sigmaX: 14, sigmaY: 14),
                 child: Container(
                   padding: EdgeInsets.symmetric(horizontal: u.sz(12), vertical: u.sz(9)),
@@ -754,7 +754,7 @@ class _CallLayerState extends State<_CallLayer> with SingleTickerProviderStateMi
           if (!compact) IgnorePointer(
             child: ClipRRect(
               borderRadius: BorderRadius.circular(u.sz(14)),
-              child: BackdropFilter(
+              child: LiteBackdropFilter(
                 filter: ui.ImageFilter.blur(sigmaX: 12, sigmaY: 12),
                 child: Container(
                   padding: EdgeInsets.symmetric(horizontal: u.sz(12), vertical: u.sz(9)),

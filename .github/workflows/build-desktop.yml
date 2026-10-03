@@ -320,7 +320,8 @@ jobs:
           exec /opt/metahawladar/automation_hub_desktop "$@"
           SH
           chmod 755 "$PKG/usr/bin/metahawladar"
-          cat > "$PKG/usr/share/applications/metahawladar.desktop" <<EOF
+          # file name MUST equal the binary name (app_id) or GNOME shows a blank taskbar icon
+          cat > "$PKG/usr/share/applications/automation_hub_desktop.desktop" <<EOF
           [Desktop Entry]
           Type=Application
           Name=Meta Hawladar

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io' show Platform;
 import 'dart:typed_data';
 
 import 'dart:ui';
@@ -63,7 +64,7 @@ class GlassCard extends StatelessWidget {
       child: ClipRRect(
         borderRadius: BorderRadius.circular(r),
         child: blur
-            ? BackdropFilter(filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12), child: Padding(padding: padding, child: child))
+            ? LiteBackdropFilter(filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12), child: Padding(padding: padding, child: child))
             : Padding(padding: padding, child: child),
       ),
     );
@@ -537,5 +538,48 @@ Uint8List? decodeDataUrl(String url) {
     return base64Decode(url.substring(i + 1).trim());
   } catch (_) {
     return null;
+  }
+}
+
+
+// ------------------------------------------------------------------ v27.13 lite graphics (Linux)
+/// On Linux (Intel/Mesa + GTK) the real-time blur layers flicker and can crash the GL
+/// context ("eglMakeCurrent failed"). Linux therefore renders without blur; Windows /
+/// macOS keep the full glass look. Flip with `--dart-define=LITE_GFX=true|false`.
+final bool kLiteGfx = const bool.hasEnvironment('LITE_GFX')
+    ? const bool.fromEnvironment('LITE_GFX')
+    : Platform.isLinux;
+
+/// Drop-in for `BackdropFilter`: plain child when lite graphics is on.
+class LiteBackdropFilter extends StatelessWidget {
+  const LiteBackdropFilter({super.key, required this.filter, required this.child});
+  final ImageFilter filter;
+  final Widget child;
+  @override
+  Widget build(BuildContext context) => kLiteGfx ? child : BackdropFilter(filter: filter, child: child);
+}
+
+/// Soft glow circle: blurred disc normally, radial gradient (no blur pass) on lite graphics.
+class GlowBlob extends StatelessWidget {
+  const GlowBlob({super.key, required this.color, required this.size, this.sigma = 90});
+  final Color color;
+  final double size;
+  final double sigma;
+  @override
+  Widget build(BuildContext context) {
+    if (kLiteGfx) {
+      return Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: RadialGradient(colors: [color, color.withValues(alpha: color.a * 0.45), color.withValues(alpha: 0)], stops: const [0, 0.45, 1]),
+        ),
+      );
+    }
+    return ImageFiltered(
+      imageFilter: ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
+      child: Container(width: size, height: size, decoration: BoxDecoration(shape: BoxShape.circle, color: color)),
+    );
   }
 }

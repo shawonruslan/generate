@@ -155,6 +155,11 @@ class _AssetDetailsPageState extends State<AssetDetailsPage> {
       WidgetsBinding.instance.addPostFrameCallback((_) => _presStart());
       return;
     }
+    if (item.isVideoType && kLiteGfx) {
+      // v27.13: the mpv GL texture is what crashes the Linux GL context -> poster frame only
+      _imgUrl = item.thumbUrl;
+      return;
+    }
     if (item.isVideoType) {
       final p = Player();
       _player = p;
@@ -1325,7 +1330,7 @@ class _PreviewStage extends StatelessWidget {
       case 'blur':
         backdrop = Stack(fit: StackFit.expand, children: [
           if (imgUrl.isNotEmpty) NetImage(imgUrl, fit: BoxFit.cover) else const DecoratedBox(decoration: BoxDecoration(color: Color(0xff0b0d14))),
-          ClipRect(child: BackdropFilter(filter: ui.ImageFilter.blur(sigmaX: 40, sigmaY: 40), child: Container(color: Colors.black.withValues(alpha: 0.35)))),
+          ClipRect(child: LiteBackdropFilter(filter: ui.ImageFilter.blur(sigmaX: 40, sigmaY: 40), child: Container(color: Colors.black.withValues(alpha: 0.35)))),
         ]);
         break;
       default:
@@ -1345,10 +1350,7 @@ class _Glow extends StatelessWidget {
   final Color color;
   final double size;
   @override
-  Widget build(BuildContext context) => ImageFiltered(
-        imageFilter: ui.ImageFilter.blur(sigmaX: 80, sigmaY: 80),
-        child: Container(width: size, height: size, decoration: BoxDecoration(shape: BoxShape.circle, color: color)),
-      );
+  Widget build(BuildContext context) => GlowBlob(color: color, size: size, sigma: 80);
 }
 
 // =================================================================== zoom module

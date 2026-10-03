@@ -151,10 +151,7 @@ class _Blob extends StatelessWidget {
   final Color color;
   final double size;
   @override
-  Widget build(BuildContext context) => ImageFiltered(
-        imageFilter: ImageFilter.blur(sigmaX: 90, sigmaY: 90),
-        child: Container(width: size, height: size, decoration: BoxDecoration(shape: BoxShape.circle, color: color)),
-      );
+  Widget build(BuildContext context) => GlowBlob(color: color, size: size, sigma: 90);
 }
 
 class _Loader extends StatelessWidget {
@@ -215,7 +212,7 @@ class _Sidebar extends StatelessWidget {
         border: Border(right: BorderSide(color: p.border)),
       ),
       child: ClipRect(
-        child: BackdropFilter(
+        child: LiteBackdropFilter(
           filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
           child: Column(children: [
             // ---- brand
@@ -577,7 +574,7 @@ class _Header extends StatelessWidget {
         border: Border(bottom: BorderSide(color: p.border)),
       ),
       child: ClipRect(
-        child: BackdropFilter(
+        child: LiteBackdropFilter(
           filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
           child: Padding(
             padding: EdgeInsets.symmetric(horizontal: Bp.pagePad(context), vertical: 10),
