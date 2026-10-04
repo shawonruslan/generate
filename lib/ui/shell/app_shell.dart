@@ -154,6 +154,13 @@ class _Blob extends StatelessWidget {
   Widget build(BuildContext context) => GlowBlob(color: color, size: size, sigma: 90);
 }
 
+/// Navigation groups shown in the sidebar (section labels are UI-only; tabs are unchanged).
+const List<(String, List<AppTab>)> _kNavGroups = [
+  ('Workspace', [AppTab.home, AppTab.upload, AppTab.schedule, AppTab.pins]),
+  ('Automation', [AppTab.distribute, AppTab.github, AppTab.vpn]),
+  ('System', [AppTab.notifications]),
+];
+
 class _Sidebar extends StatelessWidget {
   const _Sidebar({required this.mini});
   final bool mini;
