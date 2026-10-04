@@ -1,0 +1,37 @@
+name: automation_hub_desktop
+description: Meta Hawladar - Unified Zedge Content Studio (native Flutter desktop port of the web control panel).
+publish_to: "none"
+version: 27.12.0+7
+
+environment:
+  sdk: ">=3.6.0 <4.0.0"
+  flutter: ">=3.27.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  provider: ^6.1.2
+  http: ^1.2.2
+  shared_preferences: ^2.3.2
+  file_picker: ^8.1.2
+  desktop_drop: ^0.5.0
+  window_manager: ^0.4.2
+  image: ^4.2.0
+  archive: ^3.6.1
+  path: ^1.9.0
+  url_launcher: ^6.3.0
+  media_kit: ^1.1.11
+  media_kit_video: ^1.2.5
+  media_kit_libs_video: ^1.0.5
+  font_awesome_flutter: ^10.7.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/icon/app_icon_256.png
+    - assets/icon/app_icon_512.png
