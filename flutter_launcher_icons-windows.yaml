@@ -1,0 +1,7 @@
+# Launcher icon config for the Windows CI job.
+# Run: dart run flutter_launcher_icons -f flutter_launcher_icons-windows.yaml
+flutter_launcher_icons:
+  windows:
+    generate: true
+    image_path: "assets/icon/app_icon.png"
+    icon_size: 48
