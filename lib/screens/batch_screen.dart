@@ -252,6 +252,14 @@ class _BatchScreenState extends State<BatchScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
+  /// Short human-readable error for snackbars: never hide the root cause
+  /// behind a generic "failed" label.
+  String _errText(Object e, [int n = 160]) {
+    var s = e.toString().replaceAll(RegExp(r'\s+'), ' ').trim();
+    s = s.replaceFirst(RegExp(r'^Exception:\s*'), '');
+    return s.length > n ? '${s.substring(0, n)}…' : s;
+  }
+
   // ------------------------------------------------------------ jobs
   Future<void> _start() async {
     final prompts = _promptCtrls
@@ -314,10 +322,10 @@ class _BatchScreenState extends State<BatchScreen> {
             keys: _gemKeys,
             models: _gemModels,
           );
-        } catch (_) {
+        } catch (e) {
           if (mounted) {
-            _snack(
-                'AI director failed for set ${pi + 1}; using static arcs.');
+            _snack('AI director failed for set ${pi + 1} '
+                '(${_errText(e, 110)}); using static arcs.');
           }
         }
         if (mounted) setState(() => _done = pi + 1);
@@ -873,7 +881,9 @@ class _BatchScreenState extends State<BatchScreen> {
         ok++;
       } catch (e) {
         // The prompt-derived fallback stays in place.
-        if (mounted) _snack('Metadata failed for set ${pi + 1}.');
+        if (mounted) {
+          _snack('Metadata failed for set ${pi + 1}: ${_errText(e)}');
+        }
       }
     }
     if (mounted) {
@@ -913,7 +923,7 @@ class _BatchScreenState extends State<BatchScreen> {
       }
       _snack('Metadata rewritten for set ${pi + 1}.');
     } catch (e) {
-      _snack('Metadata rewrite failed: $e');
+      _snack('Metadata rewrite failed: ${_errText(e)}');
     }
     if (mounted) {
       setState(() {
