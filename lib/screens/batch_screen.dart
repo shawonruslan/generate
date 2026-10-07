@@ -2,11 +2,13 @@ import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
+import 'package:image/image.dart' as img;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
@@ -322,9 +324,13 @@ class _BatchScreenState extends State<BatchScreen> {
           final t = promptTypes[pi];
           plans[pi] = await GeminiApi.directSet(
             type: _metaTypeLabel(t),
-            variantLabels: [
-              for (final v in SetTypes.variants[t]!) v.label
-            ],
+            // SINGLE: the director plans the portrait only; the 1:1
+            // companion is a mechanical re-frame, not a creative variant.
+            variantLabels: t == SetType.single
+                ? const ['Wallpaper']
+                : [
+                    for (final v in SetTypes.variants[t]!) v.label
+                  ],
             prompt: prompts[pi],
             keys: _gemKeys,
             models: _gemModels,
@@ -357,7 +363,11 @@ class _BatchScreenState extends State<BatchScreen> {
       // Variants then chain sequentially: each one derives from the
       // previous stage's image (Morning -> Afternoon -> Evening ...),
       // so the progression reads clearly stage by stage.
-      if (variants.length > 1) {
+      // SINGLE is the exception: the portrait wallpaper is both anchor
+      // and final image (no hidden anchor); its 1:1 companion chains
+      // directly from the portrait via image edit.
+      final isSingle = promptTypes[pi] == SetType.single;
+      if (variants.length > 1 && !isSingle) {
         jobs.add(BatchJob(
           index: idx,
           promptIndex: pi,
@@ -373,16 +383,18 @@ class _BatchScreenState extends State<BatchScreen> {
       for (var vi = 0; vi < variants.length; vi++) {
         final v = variants[vi];
         final myIndex = idx++;
+        final anchor = isSingle ? vi == 0 : variants.length == 1;
         jobs.add(BatchJob(
           index: myIndex,
           promptIndex: pi,
           prompt: prompts[pi],
           variantLabel: v.label,
           variantSuffix: v.suffix,
-          isAnchor: variants.length == 1,
+          isAnchor: anchor,
           // Sequential chain: the first variant derives from the hidden
-          // anchor, every later variant from the previous variant's image.
-          refIndex: variants.length > 1 ? myIndex - 1 : myIndex,
+          // anchor (or, for SINGLE, the portrait is its own anchor and
+          // the companion derives from the portrait).
+          refIndex: anchor ? myIndex : myIndex - 1,
           hidden: false,
         ));
       }
@@ -568,6 +580,11 @@ class _BatchScreenState extends State<BatchScreen> {
   /// Full prompt for a job. Hidden anchors get the neutral base prompt
   /// (plus the director's anchor direction when present); variants get
   /// their own suffix plus the chaining note.
+  /// The SINGLE 1:1 foldable/tablet companion job.
+  bool _isLandscapeJob(BatchJob job) =>
+      _promptTypes[job.promptIndex] == SetType.single &&
+      job.variantLabel == 'Landscape';
+
   String _jobPrompt(BatchJob job) {
     final plan = _plans[job.promptIndex];
     if (job.isAnchor) {
@@ -578,12 +595,21 @@ class _BatchScreenState extends State<BatchScreen> {
           : '';
       return '$base$_styleSuffix$dir${SetTypes.noTextGuard}$_proFinish';
     }
-    // Palette lock keeps dual/single sets color-coherent. It is skipped
+    // Palette lock keeps dual sets color-coherent. It is skipped
     // for 24-hour and battery sets: those are defined by light and color
     // temperature changing, so locking the palette would kill the variants.
     // Battery gets a hue anchor instead: the glow hue must stay identical
     // across charge levels, only brightness and intensity progress.
+    // (SINGLE is handled above: the portrait is its own anchor and the
+    // 1:1 companion carries its own same-artwork framing instruction.)
     final type = _promptTypes[job.promptIndex];
+    if (!job.isAnchor && type == SetType.single) {
+      // 1:1 foldable/tablet companion: re-frame the portrait artwork to
+      // square. Same image, new framing - never a new scene and never a
+      // relight, so the chain note and relighting language stay out.
+      // (The variant suffix already carries the no-text guard.)
+      return '${job.prompt}${job.variantSuffix}$_styleSuffix$_proFinish';
+    }
     final temporal = type == SetType.h24 || type == SetType.battery;
     final palette = temporal
         ? ''
@@ -637,6 +663,15 @@ class _BatchScreenState extends State<BatchScreen> {
         for (var i = 0; i < base.length; i++)
           SetVariant(base[i].label,
               ', ${plan.stages[i].direction}${SetTypes.noTextGuard}'),
+      ];
+    }
+    // SINGLE: the director plans the portrait only; the 1:1 companion
+    // always keeps its static re-frame instruction.
+    if (t == SetType.single && plan != null && plan.stages.length == 1) {
+      return [
+        SetVariant(base[0].label,
+            ', ${plan.stages[0].direction}${SetTypes.noTextGuard}'),
+        base[1],
       ];
     }
     SetArc? arc;
@@ -711,7 +746,7 @@ class _BatchScreenState extends State<BatchScreen> {
         prompt: _jobPrompt(job),
         modelId: null, // auto: always resolves to an edit-capable model
         referenceUrls: [refUrls[job.refIndex]!],
-        aspectRatio: _ratio,
+        aspectRatio: _isLandscapeJob(job) ? '1:1' : _ratio,
         resolution: _resolution,
         format: _format,
         seed: seedBase == null ? freshSeed() : seedBase + job.index,
@@ -848,10 +883,32 @@ class _BatchScreenState extends State<BatchScreen> {
   }
 
   /// ZIP path for one finished item, e.g. set-01/morning.jpg.
+  /// The SINGLE 1:1 companion follows the hard naming rule: the portrait
+  /// file name plus the suffix -landscape (wallpaper.jpg ->
+  /// wallpaper-landscape.jpg), side by side in the same set folder.
   String _zipPathFor(_ItemState it, String ext) {
     final setFolder =
         'set-${(it.job.promptIndex + 1).toString().padLeft(2, '0')}';
-    return '$setFolder/${_slug(it.job.variantLabel)}.$ext';
+    var name = _slug(it.job.variantLabel);
+    if (_isLandscapeJob(it.job)) name = 'wallpaper-landscape';
+    return '$setFolder/$name.$ext';
+  }
+
+  /// Resize to exactly 2000x2000 JPEG (quality 100) for the SINGLE 1:1
+  /// foldable/tablet companion, per the template's export rule. Returns
+  /// the original bytes when decoding fails so the image is never lost.
+  Uint8List _toSquare2000(Uint8List bytes) {
+    try {
+      final decoded = img.decodeImage(bytes);
+      if (decoded == null) return bytes;
+      final resized = img.copyResize(decoded,
+          width: 2000,
+          height: 2000,
+          interpolation: img.Interpolation.cubic);
+      return Uint8List.fromList(img.encodeJpg(resized, quality: 100));
+    } catch (_) {
+      return bytes;
+    }
   }
 
   /// Prompt indices that have at least one finished, visible image.
@@ -1003,8 +1060,13 @@ class _BatchScreenState extends State<BatchScreen> {
               .get(Uri.parse(_displayUrl(r.imageUrl)))
               .timeout(const Duration(seconds: 120));
           if (resp.statusCode != 200) throw Exception('HTTP ${resp.statusCode}');
-          final path = _zipPathFor(it, _exportExt(r));
-          entries.add(ZipEntryData(path, resp.bodyBytes));
+          // The SINGLE 1:1 companion always ships as JPEG (template rule).
+          final ext =
+              _isLandscapeJob(it.job) ? 'jpg' : _exportExt(r);
+          var bytes = resp.bodyBytes;
+          if (_isLandscapeJob(it.job)) bytes = _toSquare2000(bytes);
+          final path = _zipPathFor(it, ext);
+          entries.add(ZipEntryData(path, bytes));
           firstOfSet.putIfAbsent(it.job.promptIndex, () => it);
         } catch (_) {
           skipped++;
@@ -1038,6 +1100,33 @@ class _BatchScreenState extends State<BatchScreen> {
       }
       entries.add(ZipEntryData(
           'metadata.json', utf8.encode(GeminiApi.metadataJson(metas))));
+      // prompts/ for SINGLE wallpapers (template requirement): the actual
+      // reusable generation prompt of each delivered single set, so both
+      // files can be regenerated from one prompt. Omitted when no SINGLE
+      // set was requested.
+      for (final pi in order) {
+        if (_promptTypes[pi] != SetType.single) continue;
+        BatchJob? portrait;
+        BatchJob? companion;
+        for (final j in _jobs) {
+          if (j.promptIndex != pi) continue;
+          if (j.variantLabel == 'Wallpaper') portrait = j;
+          if (j.variantLabel == 'Landscape') companion = j;
+        }
+        if (portrait == null ||
+            _states[portrait.index]?.result == null) {
+          continue;
+        }
+        final buf = StringBuffer(_jobPrompt(portrait));
+        if (companion != null) {
+          buf.write('\n\nSquare companion '
+              '(1:1, 2000x2000, foldable/tablet):\n');
+          buf.write(_jobPrompt(companion));
+        }
+        final num = (pi + 1).toString().padLeft(2, '0');
+        entries.add(ZipEntryData('prompts/set-$num-wallpaper.txt',
+            utf8.encode(buf.toString())));
+      }
       final zipFile = await buildZipFile(
           'ai-studio-sets-${DateTime.now().millisecondsSinceEpoch}.zip',
           entries);

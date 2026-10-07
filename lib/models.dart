@@ -245,7 +245,8 @@ class SetTypes {
       };
 
   static String description(SetType t) => switch (t) {
-        SetType.single => 'One image per prompt.',
+        SetType.single =>
+          'Portrait wallpaper plus its 1:1 foldable/tablet companion (2000x2000), re-framed from the same artwork.',
         SetType.h24 =>
           '4 images per prompt. A neutral anchor image is generated first '
           '(used only as the chaining reference, not part of the set); '
@@ -271,7 +272,22 @@ class SetTypes {
 
   static const Map<SetType, List<SetVariant>> variants = {
     SetType.single: [
-      SetVariant('Image', ''),
+      // The portrait master: also the chaining anchor for its companion.
+      SetVariant('Wallpaper', ''),
+      // 1:1 foldable/tablet companion. It is NEVER a new scene: the
+      // portrait is re-framed to square via image edit. Same artwork,
+      // only the framing changes - camera pulled back and widened, the
+      // existing background extended naturally into the new space.
+      SetVariant(
+          'Landscape',
+          ', square 1:1 re-frame of the same wallpaper artwork for foldable phones and tablets'
+          ', keep the identical subject identity, geometry, pose, materials, color palette, lighting direction, rendering style and mood of the reference image'
+          ' - it must be recognizably the same wallpaper at thumbnail size'
+          ', change only the framing: pull the camera back and widen it, extend the existing background and atmosphere naturally into the new square space'
+          ', hero mass slightly below center, whole hero inside the frame with at least 6 percent safe margin on every edge'
+          ', quiet low-detail upper third for the clock and widgets, hero and its margin inside the central 85 percent of the square'
+          ', do not duplicate the subject, add new structures or invent elements the reference does not contain'
+          ', no stretching, squashing, letterboxing, mirroring, blur-bar padding or tiling, no visible seams$noTextGuard'),
     ],
     SetType.h24: [
       SetVariant('Morning',
