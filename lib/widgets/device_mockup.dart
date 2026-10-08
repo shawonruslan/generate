@@ -10,7 +10,7 @@ import 'package:flutter/material.dart';
 enum MockupMode { wallpaper, lock, home, chat, call }
 
 /// Phone hardware variants for the device preview.
-enum DeviceModel { island, notch, punch, edge }
+enum DeviceModel { island, notch, punch, edge, fold }
 
 extension DeviceModelSpec on DeviceModel {
   String get label => switch (this) {
@@ -18,6 +18,7 @@ extension DeviceModelSpec on DeviceModel {
         DeviceModel.notch => 'Classic Notch',
         DeviceModel.punch => 'Punch Hole',
         DeviceModel.edge => 'Edge Curve',
+        DeviceModel.fold => 'Fold Pro',
       };
 
   double get radius => switch (this) {
@@ -25,6 +26,7 @@ extension DeviceModelSpec on DeviceModel {
         DeviceModel.notch => 42,
         DeviceModel.punch => 36,
         DeviceModel.edge => 44,
+        DeviceModel.fold => 38,
       };
 
   Color get bodyColor => switch (this) {
@@ -32,6 +34,7 @@ extension DeviceModelSpec on DeviceModel {
         DeviceModel.notch => const Color(0xFF0e0e12),
         DeviceModel.punch => const Color(0xFF1a1d26),
         DeviceModel.edge => const Color(0xFFd4d8e0),
+        DeviceModel.fold => const Color(0xFF101014),
       };
 
   Color get borderColor => switch (this) {
@@ -39,6 +42,7 @@ extension DeviceModelSpec on DeviceModel {
         DeviceModel.notch => const Color(0xFF2c2c34),
         DeviceModel.punch => const Color(0xFF4d5468),
         DeviceModel.edge => const Color(0xFF9aa0ae),
+        DeviceModel.fold => const Color(0xFF3a3a44),
       };
 
   List<Color> get backColors => switch (this) {
@@ -46,6 +50,7 @@ extension DeviceModelSpec on DeviceModel {
         DeviceModel.notch => const [Color(0xFF1c1c22), Color(0xFF101014)],
         DeviceModel.punch => const [Color(0xFF232936), Color(0xFF141824)],
         DeviceModel.edge => const [Color(0xFFe4e8f0), Color(0xFFb7bdcb)],
+        DeviceModel.fold => const [Color(0xFF232329), Color(0xFF121216)],
       };
 
   /// Slimmer side bezels on the curved-edge model.
@@ -102,6 +107,13 @@ extension DeviceModelSpec on DeviceModel {
               right: 0,
               child: Center(child: _hole(13)),
             ),
+        // Foldable inner display: small punch-hole camera, top center.
+        DeviceModel.fold => Positioned(
+              top: 22,
+              left: 0,
+              right: 0,
+              child: Center(child: _hole(12)),
+            ),
       };
 
   /// iPhone-style left buttons vs Android-style right buttons.
@@ -123,7 +135,7 @@ extension DeviceModelSpec on DeviceModel {
                   child: _PhoneFrame.sideButton(
                       height: 72, color: borderColor)),
             ],
-        DeviceModel.punch || DeviceModel.edge => [
+        DeviceModel.punch || DeviceModel.edge || DeviceModel.fold => [
               Positioned(
                   right: -4,
                   top: 130,
@@ -169,12 +181,61 @@ class _DevicePreviewDialog extends StatefulWidget {
   State<_DevicePreviewDialog> createState() => _DevicePreviewDialogState();
 }
 
-class _DevicePreviewDialogState extends State<_DevicePreviewDialog> {
+class _DevicePreviewDialogState extends State<_DevicePreviewDialog>
+    with SingleTickerProviderStateMixin {
   MockupMode _mode = MockupMode.lock;
   DeviceModel _device = DeviceModel.island;
   double _rotX = 0.0;
   double _rotY = 0.0;
   double _zoom = 1.0;
+
+  /// Fold/unfold animation for the foldable (0 = folded, 1 = unfolded).
+  late final AnimationController _foldCtl;
+  late final Animation<double> _foldAnim;
+
+  @override
+  void initState() {
+    super.initState();
+    _foldCtl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 900));
+    _foldAnim =
+        CurvedAnimation(parent: _foldCtl, curve: Curves.easeInOutCubic);
+    _foldAnim.addListener(() {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _foldCtl.dispose();
+    super.dispose();
+  }
+
+  /// Animated phone width: the foldable morphs from a narrow folded
+  /// phone to a wide unfolded one.
+  double get _phoneWidth => _device == DeviceModel.fold
+      ? lerpDouble(236.0, 480.0, _foldAnim.value)!
+      : 276.0;
+
+  void _toggleFold() {
+    if (_foldAnim.value > 0.5 ||
+        _foldCtl.status == AnimationStatus.forward) {
+      _foldCtl.reverse();
+    } else {
+      _foldCtl.forward();
+    }
+  }
+
+  void _selectDevice(DeviceModel d) {
+    setState(() => _device = d);
+    if (d == DeviceModel.fold) {
+      // Showcase the unfold animation on select.
+      _foldCtl.reset();
+      _foldCtl.forward();
+    } else {
+      _foldCtl.value = 0.0;
+    }
+  }
 
   void _resetView() => setState(() {
         _rotX = 0.0;
@@ -199,7 +260,7 @@ class _DevicePreviewDialogState extends State<_DevicePreviewDialog> {
     final textTheme = Theme.of(context).textTheme;
     // Keep the zoomed phone inside the dialog width (no overflow clipping).
     final fitCap = clampDouble(
-        (MediaQuery.of(context).size.width - 64) / 276.0, 0.6, 2.0);
+        (MediaQuery.of(context).size.width - 64) / _phoneWidth, 0.6, 2.0);
     final effZoom = clampDouble(_zoom, 0.6, fitCap);
     return Dialog(
       insetPadding: const EdgeInsets.all(16),
@@ -257,7 +318,7 @@ class _DevicePreviewDialogState extends State<_DevicePreviewDialog> {
                       label: Text(d.label),
                       selected: _device == d,
                       visualDensity: VisualDensity.compact,
-                      onSelected: (_) => setState(() => _device = d),
+                      onSelected: (_) => _selectDevice(d),
                     ),
                 ],
               ),
@@ -287,6 +348,10 @@ class _DevicePreviewDialogState extends State<_DevicePreviewDialog> {
                           device: _device,
                           rotX: _rotX,
                           rotY: _rotY,
+                          width: _phoneWidth,
+                          crease: _device == DeviceModel.fold
+                              ? _foldAnim.value
+                              : 0.0,
                         ),
                       ),
                     ),
@@ -297,6 +362,16 @@ class _DevicePreviewDialogState extends State<_DevicePreviewDialog> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
+                  if (_device == DeviceModel.fold)
+                    IconButton(
+                      tooltip:
+                          _foldAnim.value > 0.5 ? 'Fold' : 'Unfold',
+                      visualDensity: VisualDensity.compact,
+                      icon: Icon(_foldAnim.value > 0.5
+                          ? Icons.unfold_less
+                          : Icons.unfold_more),
+                      onPressed: _toggleFold,
+                    ),
                   IconButton(
                     tooltip: 'Zoom out',
                     visualDensity: VisualDensity.compact,
@@ -353,12 +428,20 @@ class _PhoneFrame extends StatelessWidget {
   final double rotY;
   final DeviceModel device;
 
+  /// Rendered phone width (the foldable animates this).
+  final double width;
+
+  /// 0..1 fold crease visibility (foldable only).
+  final double crease;
+
   const _PhoneFrame(
       {required this.imageUrl,
       required this.mode,
       this.device = DeviceModel.island,
       this.rotX = 0.0,
-      this.rotY = 0.0});
+      this.rotY = 0.0,
+      this.width = _w,
+      this.crease = 0.0});
 
   static const _w = 276.0;
   static const _h = 572.0;
@@ -382,7 +465,7 @@ class _PhoneFrame extends StatelessWidget {
   }
 
   Widget _frontBody() => Container(
-        width: _w,
+        width: width,
         height: _h,
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(device.radius),
@@ -415,13 +498,40 @@ class _PhoneFrame extends StatelessWidget {
               ),
             ),
             device.notchWidget(),
+            // Fold crease: a soft valley highlight down the middle that
+            // fades in as the foldable unfolds.
+            if (crease > 0.01)
+              Positioned(
+                top: 0,
+                bottom: 0,
+                left: width / 2 - 13,
+                width: 26,
+                child: IgnorePointer(
+                  child: Opacity(
+                    opacity: crease,
+                    child: const DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [
+                            Colors.transparent,
+                            Color(0x14ffffff),
+                            Color(0x29000000),
+                            Color(0x14ffffff),
+                            Colors.transparent,
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
           ],
         ),
       );
 
   /// Back panel with a per-device camera module.
   Widget _backBody() => Container(
-        width: _w,
+        width: width,
         height: _h,
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(device.radius),
@@ -449,6 +559,16 @@ class _PhoneFrame extends StatelessWidget {
               left: 18,
               child: _cameraModule(),
             ),
+            // Foldable hinge seam on the back panel.
+            if (device == DeviceModel.fold)
+              Positioned(
+                top: 12,
+                bottom: 12,
+                left: width / 2 - 1,
+                width: 2,
+                child: Container(
+                    color: Colors.black.withOpacity(0.45)),
+              ),
             // subtle branding dot
             Center(
               child: Opacity(
@@ -522,6 +642,21 @@ class _PhoneFrame extends StatelessWidget {
                     ),
                   ),
                 ),
+              ),
+            ),
+        // Foldable: vertical triple-lens camera strip.
+        DeviceModel.fold => Container(
+              width: 54,
+              height: 168,
+              decoration: BoxDecoration(
+                color: const Color(0xFF1e1e24),
+                borderRadius: BorderRadius.circular(27),
+                border:
+                    Border.all(color: const Color(0xFF484850), width: 1.5),
+              ),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [_lens(), _lens(), _lens()],
               ),
             ),
         _ => Container(

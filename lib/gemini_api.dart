@@ -122,7 +122,8 @@ class GeminiApi {
       '"category": one of ${jsonEncode(zedgeCategories)}, '
       '"description": string (1-2 sentences, max 200 characters, natural, no hashtags, no emoji)}.\n'
       'Set types: 24-HOUR = 4 time-of-day wallpapers; DUAL = lock + home screen pair; BATTERY = 6 charge-level wallpapers; SINGLE = one wallpaper. '
-      'Mention the set behaviour naturally in the description when the type is not SINGLE. Never mention copyrighted characters, brands, humans or text.';
+      'Mention the set behaviour naturally in the description when the type is not SINGLE. Never mention copyrighted characters, brands, humans or text. '
+      'Do not describe the image in sentences - output only the JSON object.';
 
   /// Pull every "text" string out of a Gemini response body.
   static String _extractText(dynamic node) {
@@ -229,7 +230,9 @@ class GeminiApi {
   /// transient errors -> next key. Returns the text plus provenance.
   static Future<({String text, String model, int keyIndex})> _failover(
       String input, int maxTokens,
-      {required List<String> keys, required List<String> models}) async {
+      {required List<String> keys,
+      required List<String> models,
+      bool expectJson = false}) async {
     if (keys.isEmpty) throw Exception('Add at least one Gemini API key.');
     final modelList = models.isEmpty ? ['gemini-flash-latest'] : models;
     final deadKeys = <int>{};
@@ -240,6 +243,15 @@ class GeminiApi {
         try {
           final text = await _call(keys[ki], modelList[mi], input, maxTokens);
           if (text.isEmpty) break; // empty answer -> try next model
+          if (expectJson && _extractJsonMap(text) == null) {
+            // The model ignored the JSON instruction and replied in
+            // prose. Not a result - try the next key/model instead of
+            // surfacing it as a hard error.
+            lastError =
+                'Model ${modelList[mi]} replied in prose instead of JSON. '
+                'Got: ${_replySnippet(text)}';
+            continue; // next key, same model (fresh roll of the dice)
+          }
           return (text: text, model: modelList[mi], keyIndex: ki);
         } on _GeminiFailure catch (e) {
           lastError = e.message;
@@ -269,7 +281,8 @@ class GeminiApi {
         'Concept name: $concept\n'
         'Image prompt: $prompt\n\n'
         'Return the JSON object now.';
-    final r = await _failover(input, 600, keys: keys, models: models);
+    final r = await _failover(input, 600,
+        keys: keys, models: models, expectJson: true);
     final meta = parseMetadata(r.text, file: file, concept: concept);
     return GeneratedMetadata(
         metadata: meta, model: r.model, keyIndex: r.keyIndex);
@@ -304,7 +317,8 @@ class GeminiApi {
         'Variant labels in order: $labels\n'
         'User prompt: $prompt\n\n'
         'Return the JSON object now.';
-    final r = await _failover(input, 1200, keys: keys, models: models);
+    final r = await _failover(input, 1200,
+        keys: keys, models: models, expectJson: true);
     return parseDirection(r.text, variantLabels);
   }
 
