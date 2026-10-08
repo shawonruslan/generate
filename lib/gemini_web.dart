@@ -161,10 +161,6 @@ class GeminiWebJs {
 
 
 
-  /// Upload an image by simulating a drag-and-drop of a File built from
-  /// a data URL (the workflow's strategy C2), falling back to a
-  /// clipboard paste (strategy C1). Returns the winning strategy name
-  /// or '' when nothing attached.
   /// True when the chat editor is present and ready for typing.
   static const editorPresent = '''
 (() => !!document.querySelector('div.ql-editor[contenteditable="true"], rich-textarea [contenteditable="true"]'))()
@@ -180,6 +176,22 @@ class GeminiWebJs {
   ///  C2. Drag-and-drop broadcast (dragenter/dragover/drop).
   ///  C3. File-input override on any existing hidden inputs.
   /// Returns the winning strategy name or '' when nothing attached.
+  /// Upload an image, strategies aligned with the workflow
+  /// (generator__1.yml `uploadImageToGemini`):
+  ///  A. Click the "Open upload file menu" button, then assign the File
+  ///     to the revealed input[type=file] via DataTransfer (the
+  ///     workflow's primary setInputFiles strategy, adapted - there is
+  ///     no Playwright here) and dispatch change.
+  ///  C1. Clipboard paste into the editor.
+  ///  C2. Drag-and-drop broadcast (dragenter/dragover/drop).
+  ///  C3. File-input override on any existing hidden inputs.
+  /// A strategy only wins when a NEW attachment chip appears in the DOM
+  /// AND its upload finishes. Inline editor images ('rich-textarea img')
+  /// are deliberately NOT counted: a clipboard paste can drop the image
+  /// inline into the editor, which looks like success but sends the
+  /// prompt with no image attached ("No image was attached to your
+  /// request").
+  /// Returns the winning strategy name or '' when nothing attached.
   static const uploadImage = '''
 ((dataUrl, filename, mime) => (async () => {
   const delay = ms => new Promise(r => setTimeout(r, ms));
@@ -191,16 +203,65 @@ class GeminiWebJs {
     while (n--) u8[n] = bstr.charCodeAt(n);
     return new File([u8], name, {type});
   };
-  const hasAttachment = () => [
+  const chipSels = [
     'ms-file-attachment', 'upload-progress-thumbnail',
     '[class*="upload-thumbnail"]', '[class*="file-chip"]',
     '[class*="attachment"]', '[class*="FileChip"]',
-    '[jsname][class*="chip"]', 'rich-textarea img',
+    '[jsname][class*="chip"]',
     '[data-test-id*="attachment"]', '[data-test-id*="upload"]',
     '.attachment-chip', '.upload-thumbnail',
-  ].some(s => document.querySelector(s));
+  ];
+  const chipCount = () => chipSels.reduce((n, s) => {
+    try { return n + document.querySelectorAll(s).length; } catch (e) { return n; }
+  }, 0);
+  const stillUploading = () => {
+    try {
+      return !!document.querySelector(
+        'upload-progress-thumbnail, [class*="upload-progress"], [class*="uploading"]');
+    } catch (e) { return false; }
+  };
+  // File inputs, including inside open shadow roots (Playwright's
+  // selector engine pierces those; document.querySelector does not).
+  const allFileInputs = () => {
+    const out = [...document.querySelectorAll('input[type="file"]')];
+    const walk = (root) => {
+      try {
+        root.querySelectorAll('*').forEach(el => {
+          if (el.shadowRoot) {
+            out.push(...el.shadowRoot.querySelectorAll('input[type="file"]'));
+            walk(el.shadowRoot);
+          }
+        });
+      } catch (e) {}
+    };
+    walk(document);
+    return [...new Set(out)];
+  };
+  const setFiles = (inp, file) => {
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    try { inp.files = dt.files; }
+    catch (e) { Object.defineProperty(inp, 'files', {value: dt.files, configurable: true}); }
+    inp.dispatchEvent(new Event('change', {bubbles: true}));
+    inp.dispatchEvent(new Event('input', {bubbles: true}));
+  };
+  // A strategy only wins when a NEW chip appears AND its upload finishes.
+  const awaitAttached = async (before, timeoutMs) => {
+    const deadline = Date.now() + (timeoutMs || 20000);
+    while (Date.now() < deadline) {
+      await delay(600);
+      if (chipCount() > before && !stillUploading()) {
+        await delay(900);
+        if (chipCount() > before && !stillUploading()) return true;
+      }
+    }
+    return chipCount() > before && !stillUploading();
+  };
+
   const file = toFile(dataUrl, filename, mime);
-  // A: upload button -> revealed file input.
+  const before = chipCount();
+
+  // A: upload button -> file input(s).
   try {
     const btnSels = [
       'button[aria-label="Open upload file menu"]',
@@ -218,24 +279,13 @@ class GeminiWebJs {
         return label.includes('upload') || label.includes('attach') || label.includes('add image');
       });
     }
-    if (btn) {
-      btn.click();
-      let inp = null;
-      for (let i = 0; i < 10; i++) {
-        await delay(500);
-        inp = document.querySelector('input[type="file"]');
-        if (inp) break;
-      }
-      if (inp) {
-        const dt = new DataTransfer();
-        dt.items.add(file);
-        try { inp.files = dt.files; }
-        catch (e) { Object.defineProperty(inp, 'files', {value: dt.files, configurable: true}); }
-        inp.dispatchEvent(new Event('change', {bubbles: true}));
-        inp.dispatchEvent(new Event('input', {bubbles: true}));
-        await delay(1500);
-        if (hasAttachment()) return 'upload-button';
-      }
+    if (btn) btn.click();
+    await delay(800);
+    for (const inp of allFileInputs()) {
+      try {
+        setFiles(inp, file);
+        if (await awaitAttached(before, 6000)) return 'upload-button';
+      } catch (e) {}
     }
   } catch (e) {}
   // C1: clipboard paste into the editor.
@@ -248,8 +298,7 @@ class GeminiWebJs {
       const dt = new DataTransfer();
       dt.items.add(file);
       editor.dispatchEvent(new ClipboardEvent('paste', {bubbles: true, cancelable: true, clipboardData: dt}));
-      await delay(1500);
-      if (hasAttachment()) return 'clipboard-paste';
+      if (await awaitAttached(before, 8000)) return 'clipboard-paste';
     }
   } catch (e) {}
   // C2: drag broadcast.
@@ -276,30 +325,33 @@ class GeminiWebJs {
     for (const el of targets) { el.dispatchEvent(new DragEvent('drop', opts)); await delay(80); }
     document.dispatchEvent(new DragEvent('drop', opts));
     window.dispatchEvent(new DragEvent('drop', opts));
-    await delay(800);
-    if (hasAttachment()) return 'drag-broadcast';
+    if (await awaitAttached(before, 8000)) return 'drag-broadcast';
   } catch (e) {}
   // C3: file-input override on any existing hidden inputs.
   try {
-    const inputs = [...document.querySelectorAll('input[type="file"]')];
-    let tried = 0;
-    for (const inp of inputs) {
+    for (const inp of allFileInputs()) {
       try {
-        const dt2 = new DataTransfer();
-        dt2.items.add(file);
-        Object.defineProperty(inp, 'files', {value: dt2.files, configurable: true});
-        inp.dispatchEvent(new Event('change', {bubbles: true}));
-        inp.dispatchEvent(new Event('input', {bubbles: true}));
-        tried++;
+        setFiles(inp, file);
+        if (await awaitAttached(before, 6000)) return 'file-input-override';
       } catch (e2) {}
-    }
-    if (tried) {
-      await delay(700);
-      if (hasAttachment()) return 'file-input-override';
     }
   } catch (e) {}
   return '';
 })())
+''';
+
+  /// True when a real attachment chip is present in the composer
+  /// (same selectors as the upload verifier - inline editor images
+  /// are not attachments).
+  static const attachmentPresent = '''
+(() => [
+  'ms-file-attachment', 'upload-progress-thumbnail',
+  '[class*="upload-thumbnail"]', '[class*="file-chip"]',
+  '[class*="attachment"]', '[class*="FileChip"]',
+  '[jsname][class*="chip"]',
+  '[data-test-id*="attachment"]', '[data-test-id*="upload"]',
+  '.attachment-chip', '.upload-thumbnail',
+].some(s => { try { return !!document.querySelector(s); } catch (e) { return false; } }))()
 ''';
 
   /// Type [prompt] into the chat editor like a user paste.
@@ -429,11 +481,41 @@ class GeminiWebClient {
   Future<String> _uploadImage(Uint8List bytes, String filename) async {
     final small = _shrinkForUpload(bytes);
     const mime = 'image/jpeg';
-    const name = 'wallpaper.jpg';
+    final name = filename.isEmpty ? 'wallpaper.jpg' : filename;
     final dataUrl = 'data:$mime;base64,${base64Encode(small)}';
-    final r = await _driver.js(
-        '(${GeminiWebJs.uploadImage})(${jsonEncode(dataUrl)}, ${jsonEncode(name)}, ${jsonEncode(mime)})');
-    return (r ?? '').toString();
+    // The upload snippet is async. Windows' executeScript awaits the
+    // returned promise, but Android's runJavaScriptReturningResult does
+    // not - it would hand back '[object Promise]', skip the attachment
+    // check, and the prompt would go out with no image attached. Resolve
+    // through window.__upResult instead, so both platforms wait for the
+    // real strategy name (or '').
+    final invoke = 'window.__upResult = "pending";'
+        ' (${GeminiWebJs.uploadImage})(${jsonEncode(dataUrl)},'
+        ' ${jsonEncode(name)}, ${jsonEncode(mime)})'
+        '.then(function(r){ window.__upResult ='
+        ' (r === undefined || r === null) ? "" : String(r); },'
+        ' function(){ window.__upResult = ""; });'
+        ' "started";';
+    await _driver.js(invoke);
+    // The JS now verifies a NEW chip + finished upload per strategy,
+    // which can take a while across all fallbacks.
+    final deadline = DateTime.now().add(const Duration(seconds: 90));
+    while (DateTime.now().isBefore(deadline)) {
+      final v = await _driver.js('window.__upResult');
+      if (v != null && v != 'pending') {
+        final strat = v.toString();
+        if (strat.isEmpty) return '';
+        // Final re-verification: the chip must still be there right
+        // before we type, otherwise the prompt would go out imageless.
+        try {
+          final present = await _driver.js(GeminiWebJs.attachmentPresent);
+          if (present == true || present == 'true') return strat;
+        } catch (_) {}
+        return '';
+      }
+      await Future.delayed(const Duration(milliseconds: 700));
+    }
+    return '';
   }
 
   Future<void> _typePrompt(String prompt) async {

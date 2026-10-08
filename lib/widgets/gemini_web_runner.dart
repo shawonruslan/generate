@@ -93,9 +93,23 @@ class _GeminiWebRunnerDialogState
       if (!mounted) return;
       setState(() => _ready = true);
       if (!await _client.isLoggedIn) {
+        // First run: the tab is still blank, so load the app and wait for
+        // the session to show. A cold WebView2 profile needs well over a
+        // few seconds to render the avatar - a fixed delay races it, so
+        // poll until the session signal appears instead.
         await _driver.loadUrl('https://gemini.google.com/app');
-        await Future.delayed(const Duration(seconds: 4));
-        if (!await _client.isLoggedIn) {
+        final loginDeadline =
+            DateTime.now().add(const Duration(seconds: 30));
+        var loggedIn = false;
+        while (DateTime.now().isBefore(loginDeadline)) {
+          if (!mounted) return;
+          if (await _client.isLoggedIn) {
+            loggedIn = true;
+            break;
+          }
+          await Future.delayed(const Duration(seconds: 1));
+        }
+        if (!loggedIn) {
           throw Exception(
               'Gemini web session expired. Reconnect in Settings.');
         }
