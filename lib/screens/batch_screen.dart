@@ -17,6 +17,7 @@ import '../cloudinary_api.dart';
 import '../app_theme.dart';
 import '../distribute.dart';
 import '../gemini_api.dart';
+import '../gemini_web.dart';
 import '../models.dart';
 import '../secure_store.dart';
 import '../zip_export.dart';
@@ -144,10 +145,17 @@ class _BatchScreenState extends State<BatchScreen> {
   bool _geminiReady = false;
   List<String> _gemKeys = [];
   List<String> _gemModels = [];
+  /// Gemini Web (cookie) session: the desktop port of the workflow's
+  /// GEMINI_SESSION path. When present, metadata + the AI Set Director
+  /// run through gemini.google.com instead of burning API-key quota.
+  GeminiWebClient? _gemWeb;
+  bool _gemWebFirst = true;
+  String _gemWebNote = '';
   int _gridCols = 3; // result thumbnail columns, 2..6
 
-  /// True when AI metadata/director can run (Gemini API keys present).
-  bool get _aiReady => _geminiReady;
+  /// True when AI metadata/director can run (API keys and/or a Gemini
+  /// web cookie session configured).
+  bool get _aiReady => _geminiReady || _gemWeb != null;
 
   CloudinaryCredentials _creds = const CloudinaryCredentials(
       cloudName: '', apiKey: '', apiSecret: '');
@@ -181,12 +189,29 @@ class _BatchScreenState extends State<BatchScreen> {
   Future<void> _loadGemini() async {
     try {
       final pool = await GeminiStore.load();
+      final web = await GeminiWebStore.load();
+      GeminiWebClient? client;
+      var note = '';
+      if (web.sessionJson.trim().isNotEmpty) {
+        try {
+          final session = GeminiWebSession.parse(web.sessionJson);
+          client = GeminiWebClient(session);
+          note = session.summary;
+        } on GeminiWebException catch (e) {
+          note = e.message;
+        } catch (e) {
+          note = 'Gemini web session could not be read: $e';
+        }
+      }
       if (!mounted) return;
       setState(() {
         _gemKeys = pool.keys;
         _gemModels =
             pool.models.isEmpty ? ['gemini-flash-latest'] : pool.models;
         _geminiReady = pool.keys.isNotEmpty;
+        _gemWeb = client;
+        _gemWebFirst = web.preferWeb;
+        _gemWebNote = note;
       });
     } catch (_) {}
   }
@@ -325,7 +350,8 @@ class _BatchScreenState extends State<BatchScreen> {
     final plans = <int, SetDirection>{};
     if (_director) {
       if (!_aiReady) {
-        _snack('Add Gemini API keys in Settings to use the AI Set Director.');
+        _snack('Add Gemini API keys or a Gemini web cookie session in '
+            'Settings to use the AI Set Director.');
         await _openSettings();
         if (!_aiReady || !mounted) return;
       }
@@ -362,6 +388,8 @@ class _BatchScreenState extends State<BatchScreen> {
             prompt: prompts[pi],
             keys: _gemKeys,
             models: _gemModels,
+            web: _gemWeb,
+            webFirst: _gemWebFirst,
           );
         } catch (e) {
           if (mounted) {
@@ -1337,6 +1365,8 @@ class _BatchScreenState extends State<BatchScreen> {
           file: _metaFileFor(pi),
           keys: _gemKeys,
           models: _gemModels,
+          web: _gemWeb,
+          webFirst: _gemWebFirst,
         );
         if (!mounted) break;
         setState(
@@ -1379,6 +1409,8 @@ class _BatchScreenState extends State<BatchScreen> {
         file: _metaFileFor(pi),
         keys: _gemKeys,
         models: _gemModels,
+        web: _gemWeb,
+        webFirst: _gemWebFirst,
       );
       if (mounted) {
         setState(
@@ -2128,7 +2160,8 @@ class _BatchScreenState extends State<BatchScreen> {
             title: const Text('AI Set Director'),
             subtitle: Text(_aiReady
                 ? 'Gemini plans each set\u2019s arc, anchor, palette and stage directions before generating. One AI call per set.'
-                : 'Add Gemini API keys in Settings to enable.'),
+                    '${_gemWeb != null ? _gemWebFirst ? ' Using your Gemini web cookie session first (no API quota).' : ' API keys first, Gemini web cookie session as backup.' : ''}'
+                : 'Add Gemini API keys or a Gemini web cookie session in Settings to enable.'),
             value: _director,
             onChanged: _running
                 ? null
@@ -2734,7 +2767,9 @@ class _BatchScreenState extends State<BatchScreen> {
             ],
           ),
           Text(
-            '${m.model} · key #${m.keyIndex + 1}',
+            m.keyIndex < 0
+                ? '${m.model} · cookie session'
+                : '${m.model} · key #${m.keyIndex + 1}',
             style:
                 textTheme.bodySmall?.copyWith(color: scheme.outline),
           ),

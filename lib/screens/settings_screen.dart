@@ -4,6 +4,7 @@ import '../app_theme.dart';
 import '../cloudinary_api.dart';
 import '../distribute.dart';
 import '../gemini_api.dart';
+import '../gemini_web.dart';
 import '../secure_store.dart';
 
 /// Editable row for one distribution account.
@@ -51,6 +52,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _gemTesting = false;
   List<String> _gemTestLines = [];
   bool _gemTestOk = false;
+  // --- Gemini Web (cookie session) ---
+  final _gemWebCtrl = TextEditingController();
+  bool _gemWebObscure = true;
+  bool _gemWebFirst = true;
+  bool _gemWebSaving = false;
+  bool _gemWebTesting = false;
+  List<String> _gemWebLines = [];
+  bool _gemWebOk = false;
   final _distR2Ctrl = TextEditingController();
   final _distQueueCtrl = TextEditingController();
   final List<_DistAccountEdit> _distAccounts = [];
@@ -66,6 +75,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     super.initState();
     _load();
     _loadGemini();
+    _loadGeminiWeb();
     _loadDist();
   }
 
@@ -333,6 +343,246 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _gemTestLines = ['Test failed: $e'];
       });
     }
+  }
+
+  Future<void> _loadGeminiWeb() async {
+    try {
+      final web = await GeminiWebStore.load();
+      if (!mounted) return;
+      setState(() {
+        _gemWebCtrl.text = web.sessionJson;
+        _gemWebFirst = web.preferWeb;
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _saveGeminiWeb() async {
+    final raw = _gemWebCtrl.text.trim();
+    setState(() {
+      _gemWebSaving = true;
+      _gemWebLines = [];
+    });
+    // Validate + normalize exactly like the workflow does before saving,
+    // so a broken export is caught here and never mid-batch.
+    if (raw.isNotEmpty) {
+      try {
+        final session = GeminiWebSession.parse(raw);
+        setState(() {
+          _gemWebOk = session.authCookies.isNotEmpty;
+          _gemWebLines = [
+            'Format detected: ${session.format}',
+            session.summary,
+            if (session.authCookies.isEmpty)
+              'No Google auth cookie (SID / __Secure-1PSID ...) found - '
+                  're-export while gemini.google.com is open.',
+          ];
+        });
+      } on GeminiWebException catch (e) {
+        setState(() {
+          _gemWebSaving = false;
+          _gemWebOk = false;
+          _gemWebLines = [e.message];
+        });
+        return;
+      }
+    }
+    try {
+      await GeminiWebStore.save(raw, _gemWebFirst);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _gemWebSaving = false);
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Save failed: $e')));
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _gemWebSaving = false);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(raw.isEmpty
+            ? 'Gemini web session cleared.'
+            : 'Gemini web session saved on this device.')));
+  }
+
+  Future<void> _testGeminiWeb() async {
+    final raw = _gemWebCtrl.text.trim();
+    if (raw.isEmpty) {
+      setState(() {
+        _gemWebOk = false;
+        _gemWebLines = ['Paste your Gemini web session JSON first.'];
+      });
+      return;
+    }
+    setState(() {
+      _gemWebTesting = true;
+      _gemWebLines = [];
+    });
+    GeminiWebSession session;
+    try {
+      session = GeminiWebSession.parse(raw);
+    } on GeminiWebException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _gemWebTesting = false;
+        _gemWebOk = false;
+        _gemWebLines = [e.message];
+      });
+      return;
+    }
+    final result = await GeminiWebClient(session).test();
+    if (!mounted) return;
+    setState(() {
+      _gemWebTesting = false;
+      _gemWebOk = result.ok;
+      _gemWebLines = [
+        'Format detected: ${session.format}',
+        result.summary,
+        result.ok
+            ? 'OK (${result.ms}ms) - ${result.message}'
+            : 'FAIL - ${result.message}',
+      ];
+    });
+  }
+
+  Future<void> _clearGeminiWeb() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Remove Gemini web session?'),
+        content: const Text(
+            'The pasted Gemini cookie session will be deleted from this '
+            'device. Metadata and the AI Set Director will fall back to '
+            'your Gemini API keys.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Remove')),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    try {
+      await GeminiWebStore.clear();
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() {
+      _gemWebCtrl.clear();
+      _gemWebFirst = true;
+      _gemWebLines = [];
+      _gemWebOk = false;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Gemini web session removed.')));
+  }
+
+  /// Gemini Web (cookie) card - the desktop twin of the workflow's
+  /// GEMINI_SESSION input.
+  Widget _geminiWebCard(ColorScheme scheme) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _header(scheme, Icons.cookie_outlined,
+                'Gemini web session (no API key)'),
+            const SizedBox(height: 8),
+            Text(
+              'Same path as the Generator Hub workflow: paste your '
+              'gemini.google.com cookie export and metadata + the AI Set '
+              'Director run through the Gemini web session instead of the '
+              'API keys, so rate limits (429) stop blocking you. Accepts a '
+              'Playwright storageState JSON or a cookie-editor export '
+              'array. Every prompt starts a fresh chat, and an expired '
+              'session is reported instead of silently skipped.',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.outline),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _gemWebCtrl,
+              obscureText: _gemWebObscure,
+              maxLines: 5,
+              minLines: 3,
+              decoration: InputDecoration(
+                labelText: 'Gemini session JSON (cookies)',
+                hintText: '{"cookies":[{"name":"__Secure-1PSID",...}]}',
+                prefixIcon: const Icon(Icons.vpn_lock_outlined),
+                suffixIcon: IconButton(
+                  icon: Icon(_gemWebObscure
+                      ? Icons.visibility_outlined
+                      : Icons.visibility_off_outlined),
+                  onPressed: () =>
+                      setState(() => _gemWebObscure = !_gemWebObscure),
+                ),
+              ),
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              secondary: const Icon(Icons.bolt_outlined),
+              title: const Text('Use the web session first'),
+              subtitle: Text(_gemWebFirst
+                  ? 'Cookie session runs first; API keys are the backup.'
+                  : 'API keys run first; the cookie session is the backup.'),
+              value: _gemWebFirst,
+              onChanged: (v) => setState(() => _gemWebFirst = v),
+            ),
+            const SizedBox(height: 4),
+            Row(
+              children: [
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: _gemWebSaving ? null : _saveGeminiWeb,
+                    icon: const Icon(Icons.save_outlined),
+                    label: Text(_gemWebSaving ? 'Saving...' : 'Save session'),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _gemWebTesting ? null : _testGeminiWeb,
+                    icon: const Icon(Icons.wifi_tethering_outlined),
+                    label:
+                        Text(_gemWebTesting ? 'Testing...' : 'Test session'),
+                  ),
+                ),
+              ],
+            ),
+            if (_gemWebLines.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: (_gemWebOk ? Colors.green : scheme.error)
+                      .withOpacity(0.08),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (final line in _gemWebLines)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 4),
+                        child: Text(line,
+                            style: Theme.of(context).textTheme.bodySmall),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+            const SizedBox(height: 8),
+            TextButton.icon(
+              onPressed: _clearGeminiWeb,
+              icon: const Icon(Icons.delete_outline),
+              label: const Text('Remove Gemini web session'),
+              style: TextButton.styleFrom(foregroundColor: scheme.error),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _clearGemini() async {
@@ -655,6 +905,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
             const SizedBox(height: 12),
+            _geminiWebCard(scheme),
+            const SizedBox(height: 12),
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(16),
@@ -929,6 +1181,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _secretCtrl.dispose();
     _gemKeysCtrl.dispose();
     _gemModelsCtrl.dispose();
+    _gemWebCtrl.dispose();
     _distR2Ctrl.dispose();
     _distQueueCtrl.dispose();
     for (final a in _distAccounts) {

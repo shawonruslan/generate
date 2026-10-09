@@ -78,6 +78,40 @@ class GeminiStore {
   }
 }
 
+/// Gemini Web (cookie) session for the no-API-key path, mirroring the
+/// GEMINI_SESSION secret of the Generator Hub workflow. The raw JSON is
+/// stored in the OS secure storage next to the API keys.
+class GeminiWebStore {
+  GeminiWebStore._();
+
+  static const _storage = FlutterSecureStorage();
+  static const _kSession = 'gemini_web_session';
+  static const _kPreferWeb = 'gemini_web_first';
+
+  /// Raw session JSON ('' when not configured) + whether the cookie
+  /// session should be tried before the API keys.
+  static Future<({String sessionJson, bool preferWeb})> load() async {
+    final raw = await _storage.read(key: _kSession) ?? '';
+    final pref = await _storage.read(key: _kPreferWeb);
+    return (
+      sessionJson: raw,
+      // Default ON: the whole point of pasting cookies is to stop
+      // burning API-key quota.
+      preferWeb: pref == null ? true : pref == '1',
+    );
+  }
+
+  static Future<void> save(String sessionJson, bool preferWeb) async {
+    await _storage.write(key: _kSession, value: sessionJson.trim());
+    await _storage.write(key: _kPreferWeb, value: preferWeb ? '1' : '0');
+  }
+
+  static Future<void> clear() async {
+    await _storage.delete(key: _kSession);
+    await _storage.delete(key: _kPreferWeb);
+  }
+}
+
 /// Non-secret app preferences.
 class AppPrefs {
   AppPrefs._();

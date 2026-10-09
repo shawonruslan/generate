@@ -4,6 +4,8 @@ import 'dart:math';
 
 import 'package:http/http.dart' as http;
 
+import 'gemini_web.dart';
+
 /// Zedge listing metadata generated with Google's Gemini API,
 /// mirroring the web studio (index.php): multiple API keys with
 /// automatic failover (429/bad key -> next key, unknown model -> next
@@ -291,6 +293,110 @@ class GeminiApi {
   }
 
   /// Generate metadata for one set, rotating through models and keys.
+  /// Extra instruction for the cookie (web) path: the web UI has no
+  /// `responseMimeType`, so the JSON-only rule has to be spelled out the
+  /// same way the workflow spells out its [TAG] template.
+  static String _webJsonNote() =>
+      'OUTPUT RULE: reply with the raw JSON object ONLY. No markdown, no '
+      'code fences, no commentary, no explanation before or after it.';
+
+  /// One completion through the cookie session, with the same retry +
+  /// validation discipline the workflow uses (fresh chat per prompt,
+  /// non-empty reply, parseable result, otherwise retry).
+  static Future<String> _askWeb(GeminiWebClient web, String input,
+      {bool expectJson = false, int attempts = 3}) async {
+    Object? lastErr = 'no attempts';
+    for (var i = 0; i < attempts; i++) {
+      try {
+        final text = await web.ask(input,
+            attempts: 1,
+            freshChat: true,
+            timeout: const Duration(seconds: 150));
+        if (text.trim().isEmpty) {
+          lastErr = 'empty reply';
+        } else if (expectJson && _extractJsonMap(text) == null) {
+          lastErr = 'replied in prose instead of JSON. '
+              'Got: ${_replySnippet(text)}';
+        } else {
+          return text;
+        }
+      } on GeminiWebException catch (e) {
+        lastErr = e.message;
+        if (e.expired) rethrow; // re-export cookies, retrying won't help
+      } catch (e) {
+        lastErr = e;
+      }
+      if (i < attempts - 1) {
+        await Future.delayed(Duration(seconds: 2 * (i + 1)));
+      }
+    }
+    throw Exception('Gemini web (cookie session) failed. Last: $lastErr');
+  }
+
+  /// Routes one prompt through the cookie session and/or the API-key
+  /// pool. When [web] is set and [webFirst] is true the cookie session is
+  /// used first (so API quota is untouched) and the key pool is only used
+  /// if the web session fails; with [webFirst] false the order is
+  /// reversed. Either side alone is enough to succeed.
+  static Future<({String text, String model, int keyIndex})> _complete(
+      String input, int maxTokens,
+      {required List<String> keys,
+      required List<String> models,
+      GeminiWebClient? web,
+      bool webFirst = true,
+      bool expectJson = false,
+      double temperature = 0.5,
+      Duration timeout = const Duration(seconds: 90)}) async {
+    final hasKeys = keys.isNotEmpty;
+    if (web == null && !hasKeys) {
+      throw Exception(
+          'Add at least one Gemini API key, or paste a Gemini web session.');
+    }
+    Object? webErr;
+    Object? apiErr;
+
+    Future<({String text, String model, int keyIndex})> viaWeb() async {
+      final text = await _askWeb(web!, '$input\n\n${_webJsonNote()}',
+          expectJson: expectJson);
+      return (text: text, model: geminiWebModelLabel, keyIndex: -1);
+    }
+
+    Future<({String text, String model, int keyIndex})> viaKeys() =>
+        _failover(input, maxTokens,
+            keys: keys,
+            models: models,
+            expectJson: expectJson,
+            temperature: temperature,
+            timeout: timeout);
+
+    if (web != null && (webFirst || !hasKeys)) {
+      try {
+        return await viaWeb();
+      } catch (e) {
+        webErr = e;
+        if (!hasKeys) rethrow;
+      }
+    }
+    if (hasKeys) {
+      try {
+        return await viaKeys();
+      } catch (e) {
+        apiErr = e;
+      }
+    }
+    if (web != null && webErr == null) {
+      try {
+        return await viaWeb();
+      } catch (e) {
+        webErr = e;
+      }
+    }
+    throw Exception([
+      if (apiErr != null) 'API keys: $apiErr',
+      if (webErr != null) 'Gemini web: $webErr',
+    ].join(' | '));
+  }
+
   static Future<GeneratedMetadata> generate({
     required String type,
     required String concept,
@@ -298,6 +404,8 @@ class GeminiApi {
     required String file,
     required List<String> keys,
     required List<String> models,
+    GeminiWebClient? web,
+    bool webFirst = true,
   }) async {
     // Per-call variation: a random authorial voice and a random
     // temperature (0.6 - 1.0) so listings from different users and runs
@@ -308,9 +416,11 @@ class GeminiApi {
         'Concept name: $concept\n'
         'Image prompt: $prompt\n\n'
         'Return the JSON object now.';
-    final r = await _failover(input, 600,
+    final r = await _complete(input, 600,
         keys: keys,
         models: models,
+        web: web,
+        webFirst: webFirst,
         expectJson: true,
         temperature: temp,
         timeout: const Duration(seconds: 90));
@@ -341,6 +451,8 @@ class GeminiApi {
     required String prompt,
     required List<String> keys,
     required List<String> models,
+    GeminiWebClient? web,
+    bool webFirst = true,
   }) async {
     final labels = variantLabels.map((l) => '"$l"').join(', ');
     final input = '${_directorSystem()}\n\n'
@@ -348,9 +460,11 @@ class GeminiApi {
         'Variant labels in order: $labels\n'
         'User prompt: $prompt\n\n'
         'Return the JSON object now.';
-    final r = await _failover(input, 1200,
+    final r = await _complete(input, 1200,
         keys: keys,
         models: models,
+        web: web,
+        webFirst: webFirst,
         expectJson: true,
         // Director plans are long; give slow models room before the
         // timeout failover kicks in.
