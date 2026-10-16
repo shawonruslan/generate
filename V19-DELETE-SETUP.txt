@@ -1,0 +1,60 @@
+V19 — VERIFIED PERMANENT DELETE (panel + Android + R2 Worker)
+
+DEPLOY ALL THREE, IN THIS ORDER:
+1. Open the client's EXISTING Cloudflare Worker. Deploy r2-worker/worker.js.
+   Keep the SAME bucket binding (MEDIA_BUCKET or MY_BUCKET). Do not create or move buckets.
+   Set PUBLIC_BASE_URL at the top of worker.js to the public URL your stored file
+   URLs start with (your pub-xxxx.r2.dev or custom domain of the SAME bucket).
+   Click DEPLOY (not just Save). Then open the Worker URL in a normal browser tab:
+   Open the Worker root in a browser: it must show deleteProtocol: r2-delete-v1.
+2. Deploy the client's configured index.html. Keep their own Firebase/R2 settings.
+3. Rebuild and install the Android app using the client's own Core.kt settings.
+   The template ZIP has placeholders, NOT your client's filled settings.
+
+Deletion now pauses selected items (status=deleting), checks every account's
+references, asks R2 to delete each unique media object, and requires the Worker
+to verify the exact key is absent using the R2 bucket API. Only then are the
+corresponding Firebase rows removed. 404/HTML/old-worker replies are not success.
+Failed or partial deletions retain their records and URLs with a deletion error.
+Retry DELETE, not Requeue. Some bytes can already be gone after partial failure;
+Firebase and R2 are separate services, so this is not an atomic rollback.
+If the app/browser closes mid-delete, retry Delete on the retained record.
+
+Shared files / unreadable accounts:
+If another retained queue row references the same object, the selected row and
+its files are kept. The update does not silently break another account's file.
+If any account queue cannot be read, no media deletion is started. Fix that
+account's Firebase connection/permissions and retry. Do not loosen database rules
+merely to bypass the check. Pause uploads/copying during a bulk purge: reference
+checks across separate Firebase databases are not a distributed transaction.
+
+Custom R2/public media URLs:
+The gateway only deletes URLs on its own origin by default. If the SAME bucket
+also uses an R2.dev URL/custom domain, add its exact origin to the Worker's
+R2_PUBLIC_ORIGINS variable (comma-separated). Never list unrelated bucket origins.
+A wrong mapping or bucket binding can target the wrong storage; verify it first.
+
+Old already-deleted Firebase records:
+This update does NOT automatically discover/delete orphaned R2 objects. Their
+references may already be lost. Review bucket inventory/backups before cleanup;
+never delete an entire account prefix blindly. No live cloud files were deleted
+while preparing this update.
+
+Verification with YOUR sacrificial test upload:
+Upload a small new test file, note its exact R2 key, then delete it in the updated
+panel/app. Check the key in the R2 bucket console AND its Firebase row. Try a
+24H/dual/video test too (all set images + thumbnail must be accounted for).
+If deletion fails, verify the row stays with an error and use Delete to retry.
+Old browser/CDN caches may still display an earlier file; bucket.head is the
+storage check. New GET responses revalidate instead of one-year immutable cache.
+
+This gateway preserves the previous public-access model; it does not add auth.
+Use appropriate authenticated access controls for production deployments.
+
+[v21 FORCE CLEAN DELETE]
+Delete now always cleans both services: the R2 object is deleted and verified absent,
+then the Firebase row is removed. Shared/duplicate copies of the same file in other rows
+or other accounts are deleted too, so no orphan record or orphan object is left.
+Rows with no stored R2 URL, rows in "processing", and rows that changed mid-delete are no
+longer kept back; any media added during the purge is deleted as well.
+Deploy order is unchanged: Worker (r2-worker/worker.js) -> index.html -> rebuild app.
