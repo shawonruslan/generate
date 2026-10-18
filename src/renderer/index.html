@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' https: data:; style-src 'self' 'unsafe-inline'; script-src 'self'">
+<title>Wafid Desktop</title>
+<link rel="stylesheet" href="shell.css">
+</head>
+<body>
+  <!-- tab strip / title bar -->
+  <header id="titlebar">
+    <div class="brand"><img src="logo.png" alt=""><span>Wafid Desktop</span></div>
+    <div id="tabs"></div>
+    <button id="newTab" class="icon-btn small" title="New tab (Ctrl+T)"></button>
+    <div class="drag"></div>
+    <div class="winctl">
+      <button data-w="min" title="Minimize"></button>
+      <button data-w="max" title="Maximize"></button>
+      <button data-w="close" class="close" title="Close"></button>
+    </div>
+  </header>
+
+  <!-- toolbar -->
+  <nav id="toolbar">
+    <button class="icon-btn" id="bBack" title="Back (Alt+Left)"></button>
+    <button class="icon-btn" id="bFwd" title="Forward (Alt+Right)"></button>
+    <button class="icon-btn" id="bReload" title="Reload (F5)"></button>
+    <button class="icon-btn" id="bHome" title="Book appointment page"></button>
+    <form id="addr">
+      <span id="lock"></span>
+      <span id="profileBadge" title="Browser profile of this tab"></span>
+      <input id="url" spellcheck="false" autocomplete="off">
+      <span id="zoomBadge" class="hide"></span>
+    </form>
+    <div id="monPill" class="pill idle" title="Live monitor status of this tab"><i></i><span>Monitor idle</span></div>
+    <button class="icon-btn" id="bActivity" title="Activity"></button>
+    <button class="icon-btn" id="bSettings" title="Settings"></button>
+  </nav>
+
+  <!-- area covered by the web view -->
+  <main id="viewport">
+    <section id="page-settings" class="page hide"></section>
+    <section id="page-activity" class="page hide"></section>
+  </main>
+
+  <footer id="statusbar">
+    <span id="sbLeft">Ready</span>
+    <span class="grow"></span>
+    <span id="sbProxy"></span>
+    <span id="sbVer"></span>
+  </footer>
+<script src="icons.js"></script>
+<script src="shell.js"></script>
+</body>
+</html>
