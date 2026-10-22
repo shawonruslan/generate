@@ -193,7 +193,7 @@ class GitHubRepo(context: Context, private val http: OkHttpClient, private val z
             "volume_boost_pct" to volume.ifBlank { "200" },
             "silence_threshold" to silence.ifBlank { "0.02" },
             "pad_ms" to pad.ifBlank { "100" },
-            "target_account" to target.ifBlank { "zedge_2" },
+            "target_account" to target.ifBlank { "zedge_1" },
         )
         if (attachSession && session.isNotBlank()) m["gemini_session"] = session
         return m
@@ -272,6 +272,6 @@ class GitHubRepo(context: Context, private val http: OkHttpClient, private val z
     companion object {
         const val GH_API = "https://api.github.com"
         const val GENERATOR_WORKFLOW = "generator.yml"
-        val TARGET_ACCOUNTS = listOf("zedge_1", "zedge_2", "zedge_3", "zedge_4", "all_accounts")
+        val TARGET_ACCOUNTS = listOf("zedge_1")
     }
 }

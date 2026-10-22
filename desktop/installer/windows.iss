@@ -9,9 +9,9 @@
 ;  Built automatically by .github/workflows/build-desktop.yml (Inno Setup is
 ;  pre-installed on the GitHub windows runners). Local build:
 ;
-;    flutter build windows --release --dart-define=BUILD=tarek
+;    flutter build windows --release --dart-define=BUILD=mahbub
 ;    "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" ^
-;        /DMyAppVersion=27.10.2 /DMyProfile=tarek installer\windows.iss
+;        /DMyAppVersion=27.10.2 /DMyProfile=mahbub installer\windows.iss
 ;
 ;  Every value below can be overridden from the command line with /D<name>=...
 ; ============================================================================

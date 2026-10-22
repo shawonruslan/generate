@@ -126,7 +126,7 @@ jobs:
           // ─── CONFIG ────────────────────────────────────────────────────────────────
           const STABLE_AUDIO_TOKEN   = process.env.STABLE_AUDIO_TOKEN?.trim();
           const GEMINI_SESSION_RAW   = (process.env.GEMINI_SESSION_INPUT?.trim() || process.env.GEMINI_SESSION || '').trim();
-          const TARGET_ACCOUNT       = (process.env.TARGET_ACCOUNT || 'zedge_2').trim().toLowerCase();
+          const TARGET_ACCOUNT       = (process.env.TARGET_ACCOUNT || 'zedge_1').trim().toLowerCase();
           const QUEUE_PATH           = 'wallpaperQueue';
           const AUTO_GENERATE_COUNT  = parseInt(process.env.AUTO_GENERATE_COUNT || '10', 10);
           const LENGTH_SECONDS       = parseInt(process.env.LENGTH_SECONDS || '30', 10);
@@ -2800,6 +2800,6 @@ jobs:
           echo "|---------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| Mode | Auto-scan (all images missing metadata) |" >> $GITHUB_STEP_SUMMARY
           echo "| Queue path | ${{ github.event.inputs.image_queue_path }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Target DBs | All (zedge_1, zedge_2, zedge_3, zedge_4) |" >> $GITHUB_STEP_SUMMARY
+          echo "| Target DBs | zedge_1 |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "> Image metadata generated via Gemini Web (image upload) and patched back to Firebase." >> $GITHUB_STEP_SUMMARY

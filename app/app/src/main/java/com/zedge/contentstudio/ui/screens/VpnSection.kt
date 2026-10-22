@@ -166,7 +166,7 @@ fun VpnSection(vm: GitHubViewModel, openUrl: (String) -> Unit) {
         OutlinedTextField(extra, { extra = it }, Modifier.fillMaxWidth(), label = { Text("Extra config lines (optional)") }, textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Checkbox(copyAll, { copyAll = it })
-            Text("Also copy this profile to all 4 accounts", style = MaterialTheme.typography.bodySmall)
+            Text("Also copy this profile to all accounts", style = MaterialTheme.typography.bodySmall)
         }
         fun build(): VpnProfile = VpnProfile(
             editing?.id ?: VpnRepo.newId(), name.trim(), type, config.replace("\r", ""),

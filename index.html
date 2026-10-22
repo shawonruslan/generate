@@ -5480,7 +5480,7 @@ html[data-theme="dark"] input::placeholder, html[data-theme="dark"] textarea::pl
               <div class="gh-btn-row" style="margin-top:10px;">
                 <button type="button" class="gh-btn gh-btn-primary" id="vpnSaveProfileBtn"><i class="fas fa-save"></i> Save profile</button>
                 <button type="button" class="gh-btn" id="vpnSaveTestBtn"><i class="fas fa-vial"></i> Save &amp; test</button>
-                <label class="gh-check" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;"><input type="checkbox" id="vpnCopyAll" /> Save to all 4 accounts</label>
+                <label class="gh-check" style="display:none"><input type="checkbox" id="vpnCopyAll" /> Save to all accounts</label>
               </div>
             </div>
           </div>
@@ -7728,7 +7728,7 @@ html[data-theme="dark"] input::placeholder, html[data-theme="dark"] textarea::pl
     // stored in uploadState (lastUsedProfileIndex / profileUploadCounts).
     // ------------------------------------------------------------------
     // v9: defaults only - the live schedule comes from Firebase (dashboardSettings/schedule) via subscribeSchedules().
-    const DEFAULT_UPLOAD_WINDOWS = { zedge1: [10, 15, 20], zedge2: [11, 16, 21], zedge3: [5, 11, 17], zedge4: [4, 9, 14] };
+    const DEFAULT_UPLOAD_WINDOWS = { zedge1: [10, 15, 20] };
     const UPLOAD_WINDOWS = JSON.parse(JSON.stringify(DEFAULT_UPLOAD_WINDOWS));
     // v23: exact per-slot upload time. projectKey -> [{hour, minute, exact}] (kept in sync with UPLOAD_WINDOWS hours)
     const UPLOAD_SLOTS = {};
@@ -11073,7 +11073,7 @@ html[data-theme="dark"] input::placeholder, html[data-theme="dark"] textarea::pl
     ];
     const vpnEmpty = () => ({ mode: "none", activeProfileId: "", keepProxy: false, profiles: {}, github: null, lastTest: null, lastRun: null });
     let vpnCurrent = (typeof activeProject === "string" && VPN_ACCOUNTS.includes(activeProject)) ? activeProject : "zedge1";
-    const vpnStates = { zedge1: vpnEmpty(), zedge2: vpnEmpty(), zedge3: vpnEmpty(), zedge4: vpnEmpty() };
+    const vpnStates = { zedge1: vpnEmpty() };
     const vpnUnsubs = {};
     let vpnFiles = {}; // field -> content (only the ones the config references, or the ones loaded from a saved profile)
     let vpnAuthForced = false;
@@ -11475,7 +11475,7 @@ html[data-theme="dark"] input::placeholder, html[data-theme="dark"] textarea::pl
           '<button type="button" class="gh-btn gh-btn-sm gh-btn-primary" data-vpn="test" data-id="' + p.id + '" title="Run a connection test on GitHub"><i class="fas fa-vial"></i> Test</button>' +
           (active ? "" : '<button type="button" class="gh-btn gh-btn-sm" data-vpn="active" data-id="' + p.id + '"><i class="fas fa-bolt"></i> Set active</button>') +
           '<button type="button" class="gh-btn gh-btn-sm" data-vpn="edit" data-id="' + p.id + '" title="Edit"><i class="fas fa-pen"></i></button>' +
-          '<button type="button" class="gh-btn gh-btn-sm" data-vpn="copy" data-id="' + p.id + '" title="Copy to all 4 accounts"><i class="fas fa-clone"></i></button>' +
+          '<button type="button" class="gh-btn gh-btn-sm" data-vpn="copy" data-id="' + p.id + '" title="Copy to all accounts"><i class="fas fa-clone"></i></button>' +
           '<button type="button" class="gh-btn gh-btn-sm gh-btn-danger" data-vpn="delete" data-id="' + p.id + '" title="Delete"><i class="fas fa-trash"></i></button>' +
           "</div></div>";
       }).join("");
@@ -11829,7 +11829,7 @@ html[data-theme="dark"] input::placeholder, html[data-theme="dark"] textarea::pl
       setVal("ghToken", cfg.token);
       if (cfg.owner && cfg.repo) setVal("ghRepoLink", "https://github.com/" + cfg.owner + "/" + cfg.repo);
       const wf = cfg.workflows || {};
-      ["zedge1", "zedge2", "zedge3", "zedge4"].forEach((k, i) => { const el = document.getElementById("ghWfZedge" + (i + 1)); if (el) el.value = wf[k] || ""; });
+      ["zedge1"].forEach((k, i) => { const el = document.getElementById("ghWfZedge" + (i + 1)); if (el) el.value = wf[k] || ""; });
       const savedSession = localStorage.getItem(GH_SESSION_KEY) || "";
       if (savedSession) {
         const ta = document.getElementById("ghSession");

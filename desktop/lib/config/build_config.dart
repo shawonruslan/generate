@@ -5,7 +5,7 @@
 /// `DEFAULT_UPLOAD_WINDOWS`, `VPN_ACCOUNTS`). Select the profile at build time:
 ///
 /// ```
-/// flutter build windows --dart-define=BUILD=tarek
+/// flutter build windows --dart-define=BUILD=mahbub
 /// ```
 ///
 /// The profiles that exist in this copy live in `profile_data.dart`

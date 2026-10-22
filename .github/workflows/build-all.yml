@@ -19,7 +19,7 @@ name: Build All Apps
 # Tag a version to publish ONE GitHub Release with everything attached:
 #   git tag v27.13.0 && git push --tags
 #
-# Per-person setting: BUILD_PROFILE below (shawon / tarek / ...) - it is
+# Per-person setting: BUILD_PROFILE below (e.g. mahbub) - it is
 # compiled into the desktop app and used in the artifact file names.
 #
 # Android signing secrets (Settings -> Secrets and variables -> Actions):
@@ -54,7 +54,7 @@ permissions:
   contents: write   # needed to create the GitHub Release on tag pushes
 
 env:
-  # --- per-person: change to your profile name (shawon / tarek / ...) ---
+  # --- per-person: change to your profile name (e.g. mahbub) ---
   BUILD_PROFILE: mahbub
   # --- Flutter desktop settings (pinned on purpose: newer stable releases made
   # `IconData` a final class, which breaks font_awesome_flutter 10.x) ---

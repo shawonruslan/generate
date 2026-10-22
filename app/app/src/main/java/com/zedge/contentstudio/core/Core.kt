@@ -13,7 +13,7 @@ import java.util.Locale
 import java.util.concurrent.atomic.AtomicLong
 
 // ---------------------------------------------------------------------------
-// Accounts (the four Zedge automation Firebase projects)
+// Accounts (the Zedge automation Firebase project(s))
 // ---------------------------------------------------------------------------
 data class Account(val key: String, val label: String, val databaseUrl: String)
 

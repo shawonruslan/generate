@@ -55,7 +55,7 @@ class GitHubViewModel(app: Application) : AndroidViewModel(app) {
     // Ringtone generator form (defaults identical to the dashboard)
     val rgCount = MutableStateFlow("10"); val rgLength = MutableStateFlow("5"); val rgAutoProcess = MutableStateFlow("true")
     val rgVolume = MutableStateFlow("200"); val rgSilence = MutableStateFlow("0.02"); val rgPad = MutableStateFlow("100")
-    val rgTarget = MutableStateFlow("zedge_2"); val rgAttachSession = MutableStateFlow(true)
+    val rgTarget = MutableStateFlow("zedge_1"); val rgAttachSession = MutableStateFlow(true)
     // Metadata generator form
     val mdQueuePath = MutableStateFlow("wallpaperQueue"); val mdAttachSession = MutableStateFlow(true)
 

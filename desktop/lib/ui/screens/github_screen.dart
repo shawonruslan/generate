@@ -264,7 +264,7 @@ class _RingtoneCardState extends State<_RingtoneCard> {
   final _volume = TextEditingController(text: '200');
   final _silence = TextEditingController(text: '0.02');
   final _pad = TextEditingController(text: '100');
-  String _target = 'zedge_2';
+  String _target = 'zedge_1';
   bool _attach = true;
   bool _busy = false;
 
@@ -294,7 +294,7 @@ class _RingtoneCardState extends State<_RingtoneCard> {
           Field('Volume boost %', width: 150, child: TextField(controller: _volume, decoration: _dec('200'), keyboardType: TextInputType.number)),
           Field('Silence threshold', width: 150, child: TextField(controller: _silence, decoration: _dec('0.02'), keyboardType: TextInputType.number)),
           Field('Edge padding ms', width: 150, child: TextField(controller: _pad, decoration: _dec('100'), keyboardType: TextInputType.number)),
-          Field('Target account', width: 170, child: ZDropdown<String>(value: _target, items: const [('zedge_1', 'zedge_1'), ('zedge_2', 'zedge_2'), ('zedge_3', 'zedge_3'), ('zedge_4', 'zedge_4'), ('all_accounts', 'all_accounts')], onChanged: (v) => setState(() => _target = v))),
+          Field('Target account', width: 170, child: ZDropdown<String>(value: _target, items: const [('zedge_1', 'zedge_1')], onChanged: (v) => setState(() => _target = v))),
         ]),
         const SizedBox(height: 10),
         Row(children: [

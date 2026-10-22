@@ -133,9 +133,6 @@ object RunSchedule {
     /** Default window start hours (Asia/Riyadh) per account - same as DEFAULT_WINDOWS in each zedgeN.yml gate job. */
     val DEFAULT_WINDOWS: Map<String, List<Int>> = mapOf(
         "zedge1" to listOf(10, 15, 20),
-        "zedge2" to listOf(11, 16, 21),
-        "zedge3" to listOf(5, 11, 17),
-        "zedge4" to listOf(4, 9, 14),
     )
 
     /** Live windows (Firebase dashboardSettings/schedule per account); falls back to DEFAULT_WINDOWS. */
