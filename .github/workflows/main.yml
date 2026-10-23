@@ -1,0 +1,183 @@
+name: HyperFrames temporary preview
+run-name: HyperFrames preview (${{ inputs.minutes }} minutes)
+
+on:
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: Preview session length (uses Actions minutes)
+        type: choice
+        required: true
+        default: '30'
+        options:
+          - '15'
+          - '30'
+          - '60'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hyperframes-preview
+  cancel-in-progress: false
+
+jobs:
+  preview:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    env:
+      CI: 'true'
+      HYPERFRAMES_SKIP_SKILLS: '1'
+      PROJECT_DIR: ${{ github.workspace }}/my-video
+
+    steps:
+      - name: Check out your project repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Require a private access email
+        env:
+          ALLOWED_EMAIL: ${{ secrets.HYPERFRAMES_ALLOWED_EMAIL }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$ALLOWED_EMAIL" =~ ^[^[:space:],*@]+@[^[:space:],*@]+\.[^[:space:],*@]+$ ]]; then
+            echo '::error::Add repository secret HYPERFRAMES_ALLOWED_EMAIL with your email address.'
+            exit 1
+          fi
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install HyperFrames and FFmpeg
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          npm install --global hyperframes@0.8.188
+          hyperframes --version
+
+      - name: Install pinned Cloudflare client
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 \
+            https://github.com/cloudflare/cloudflared/releases/download/2026.10.3/cloudflared-linux-amd64 \
+            --output "$RUNNER_TEMP/cloudflared"
+          echo "053b80b0a23031a038fdbf3c073f59f82b8f1f152aa67971d7383ffafc0dbab0  $RUNNER_TEMP/cloudflared" | sha256sum --check
+          chmod +x "$RUNNER_TEMP/cloudflared"
+          "$RUNNER_TEMP/cloudflared" version
+          "$RUNNER_TEMP/cloudflared" tunnel --help > "$RUNNER_TEMP/tunnel-help.txt"
+          grep -q -- '--allowed-mail' "$RUNNER_TEMP/tunnel-help.txt"
+
+      - name: Prepare video project
+        run: |
+          set -euo pipefail
+          if [[ ! -d "$PROJECT_DIR" ]]; then
+            hyperframes init "$PROJECT_DIR" --non-interactive
+          fi
+          if [[ ! -f "$PROJECT_DIR/index.html" ]]; then
+            echo '::error::my-video exists but has no index.html. Add a valid HyperFrames project.'
+            exit 1
+          fi
+
+      - name: Start protected browser session
+        env:
+          ALLOWED_EMAIL: ${{ secrets.HYPERFRAMES_ALLOWED_EMAIL }}
+          SESSION_MINUTES: ${{ inputs.minutes }}
+        run: |
+          set -euo pipefail
+          case "$SESSION_MINUTES" in 15|30|60) ;; *) exit 1 ;; esac
+          PREVIEW_PID=''
+          TUNNEL_PID=''
+          cleanup() {
+            [[ -z "$TUNNEL_PID" ]] || kill "$TUNNEL_PID" 2>/dev/null || true
+            [[ -z "$PREVIEW_PID" ]] || kill "$PREVIEW_PID" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+
+          hyperframes preview "$PROJECT_DIR" --port 3002 --no-open --foreground \
+            > "$RUNNER_TEMP/hyperframes.log" 2>&1 &
+          PREVIEW_PID=$!
+
+          READY=false
+          for attempt in $(seq 1 90); do
+            if curl --fail --silent http://127.0.0.1:3002/ > /dev/null; then
+              READY=true
+              break
+            fi
+            if ! kill -0 "$PREVIEW_PID" 2>/dev/null; then break; fi
+            sleep 2
+          done
+          if [[ "$READY" != true ]]; then
+            tail -n 80 "$RUNNER_TEMP/hyperframes.log"
+            echo '::error::HyperFrames did not start.'
+            exit 1
+          fi
+
+          "$RUNNER_TEMP/cloudflared" tunnel --no-autoupdate --protocol http2 \
+            --url http://127.0.0.1:3002 --allowed-mail "$ALLOWED_EMAIL" \
+            > "$RUNNER_TEMP/cloudflared.log" 2>&1 &
+          TUNNEL_PID=$!
+
+          PUBLIC_URL=''
+          for attempt in $(seq 1 60); do
+            PUBLIC_URL=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' \
+              "$RUNNER_TEMP/cloudflared.log" | head -n 1 || true)
+            if [[ -n "$PUBLIC_URL" ]]; then break; fi
+            if ! kill -0 "$TUNNEL_PID" 2>/dev/null; then break; fi
+            sleep 2
+          done
+          if [[ -z "$PUBLIC_URL" ]]; then
+            echo '::error::Cloudflare did not provide a tunnel URL.'
+            tail -n 40 "$RUNNER_TEMP/cloudflared.log"
+            exit 1
+          fi
+
+          EDITOR_URL="$PUBLIC_URL/#project/my-video"
+          echo "Open HyperFrames: $EDITOR_URL"
+          {
+            echo '## HyperFrames browser editor'
+            echo
+            echo "[Open your editor]($EDITOR_URL)"
+            echo
+            echo 'Sign in with the email saved in HYPERFRAMES_ALLOWED_EMAIL, then enter the emailed code.'
+            echo
+            echo "Session duration: $SESSION_MINUTES minutes after startup. Allow a few seconds for the tunnel to connect."
+            echo
+            echo 'This is browser Studio, not the native Framey desktop app.'
+            echo 'At normal completion, download the hyperframes-project artifact to keep your files.'
+            echo 'Cancelling the run can prevent the artifact from uploading. Download important work first.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          DEADLINE=$((SECONDS + SESSION_MINUTES * 60))
+          while (( SECONDS < DEADLINE )); do
+            if ! kill -0 "$PREVIEW_PID" 2>/dev/null || ! kill -0 "$TUNNEL_PID" 2>/dev/null; then
+              echo '::error::The editor or tunnel stopped unexpectedly.'
+              tail -n 60 "$RUNNER_TEMP/hyperframes.log"
+              tail -n 40 "$RUNNER_TEMP/cloudflared.log"
+              exit 1
+            fi
+            sleep 10
+          done
+
+      - name: Save project files
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: hyperframes-project-${{ github.run_id }}
+          path: |
+            my-video/
+            !my-video/**/node_modules/**
+            !my-video/**/.cache/**
+            !my-video/**/.env*
+            !my-video/**/credentials*
+          include-hidden-files: false
+          if-no-files-found: warn
+          retention-days: 3
