@@ -8,11 +8,11 @@ on:
         description: Preview session length (uses Actions minutes)
         type: choice
         required: true
-        default: '30'
+        default: '330'
         options:
-          - '15'
-          - '30'
+          - '330'
           - '60'
+          - '30'
 
 permissions:
   contents: read
@@ -24,7 +24,7 @@ concurrency:
 jobs:
   preview:
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 360
     defaults:
       run:
         shell: bash
@@ -39,27 +39,29 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Require a private access email
-        env:
-          ALLOWED_EMAIL: ${{ secrets.HYPERFRAMES_ALLOWED_EMAIL }}
-        run: |
-          set -euo pipefail
-          if [[ ! "$ALLOWED_EMAIL" =~ ^[^[:space:],*@]+@[^[:space:],*@]+\.[^[:space:],*@]+$ ]]; then
-            echo '::error::Add repository secret HYPERFRAMES_ALLOWED_EMAIL with your email address.'
-            exit 1
-          fi
-
       - name: Install Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
 
-      - name: Install HyperFrames and FFmpeg
+      - name: Install HyperFrames and check FFmpeg
+        timeout-minutes: 8
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ffmpeg
-          npm install --global hyperframes@0.8.188
+          if command -v ffmpeg >/dev/null 2>&1; then
+            echo 'Using FFmpeg already installed on the runner.'
+          else
+            echo 'Installing FFmpeg (maximum 3 minutes).'
+            if ! sudo timeout --kill-after=10s 180s bash -c '
+              set -euo pipefail
+              apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update
+              DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -y --no-install-recommends ffmpeg
+            '; then
+              echo '::error::FFmpeg installation failed or exceeded 3 minutes. No app session was started. Check the package mirror and rerun.'
+              exit 1
+            fi
+          fi
+          npm install --global --no-audit --no-fund hyperframes@0.8.188
           hyperframes --version
 
       - name: Install pinned Cloudflare client
@@ -71,8 +73,6 @@ jobs:
           echo "053b80b0a23031a038fdbf3c073f59f82b8f1f152aa67971d7383ffafc0dbab0  $RUNNER_TEMP/cloudflared" | sha256sum --check
           chmod +x "$RUNNER_TEMP/cloudflared"
           "$RUNNER_TEMP/cloudflared" version
-          "$RUNNER_TEMP/cloudflared" tunnel --help > "$RUNNER_TEMP/tunnel-help.txt"
-          grep -q -- '--allowed-mail' "$RUNNER_TEMP/tunnel-help.txt"
 
       - name: Prepare video project
         run: |
@@ -85,13 +85,12 @@ jobs:
             exit 1
           fi
 
-      - name: Start protected browser session
+      - name: Start browser session
         env:
-          ALLOWED_EMAIL: ${{ secrets.HYPERFRAMES_ALLOWED_EMAIL }}
           SESSION_MINUTES: ${{ inputs.minutes }}
         run: |
           set -euo pipefail
-          case "$SESSION_MINUTES" in 15|30|60) ;; *) exit 1 ;; esac
+          case "$SESSION_MINUTES" in 30|60|330) ;; *) exit 1 ;; esac
           PREVIEW_PID=''
           TUNNEL_PID=''
           cleanup() {
@@ -122,7 +121,7 @@ jobs:
           fi
 
           "$RUNNER_TEMP/cloudflared" tunnel --no-autoupdate --protocol http2 \
-            --url http://127.0.0.1:3002 --allowed-mail "$ALLOWED_EMAIL" \
+            --url http://127.0.0.1:3002 \
             > "$RUNNER_TEMP/cloudflared.log" 2>&1 &
           TUNNEL_PID=$!
 
@@ -147,7 +146,7 @@ jobs:
             echo
             echo "[Open your editor]($EDITOR_URL)"
             echo
-            echo 'Sign in with the email saved in HYPERFRAMES_ALLOWED_EMAIL, then enter the emailed code.'
+            echo 'No login is required. Anyone with this link can open the editor, so do not share it.'
             echo
             echo "Session duration: $SESSION_MINUTES minutes after startup. Allow a few seconds for the tunnel to connect."
             echo
