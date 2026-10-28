@@ -240,3 +240,20 @@ JPEG only, **2800x2400 (7:6 = 1.4:1.2)**, max 25 MP, max 8 MB, and an **extensio
 - Prompt: the same artwork continued sideways - identical subject, palette, light and style, background extended left and right, hero centred with 12% side safe margin (no mirroring, bars or blurred fills).
 - The app trims evenly to exactly 7:6, scales to 2800x2400 and encodes JPEG (quality 95, lowered automatically if needed to stay under 8 MB), in a background isolate.
 - File name stays `wallpaper-landscape.jpg` next to `wallpaper` in each set folder.
+
+## v1.10 - Smart originality + professional compare view
+
+**Smarter Image to Prompt (less look-alike / copyright risk)**
+- *Originality* level in Image to Prompt: Faithful / Balanced / Creative (default) / Bold.
+- Every picture gets its own random **originality brief** (3 / 5 / 7 forced changes drawn from subject, pose, setting, time & weather, camera, colour, light, style and story-twist pools) plus a self-check ("a viewer must not think it is the same image").
+- **Anti-repeat**: when a new prompt reads > 40 % like an earlier prompt of the session, Gemini rewrites it once with a "make it clearly different" note - a Pinterest board of look-alikes no longer gives look-alike prompts.
+- **More original** (item sheet / compare view): rewrites a prompt at Bold level and adds it to the batch list again.
+- A 768 px copy of every analysed picture is kept (app support folder `prompt_refs`) for later comparison - captures too.
+
+**Originality check (compare view)**
+- Opens from a batch result (*Originality check*), the home result (*Originality*) or an Image to Prompt item (*Check originality*, pick the generated file).
+- The reference is found automatically from the prompt; *Change reference* picks another history item or any file.
+- Creativity score ring + verdict (Original / Inspired - safe / Review - close / Too similar).
+- Side-by-side, drag **slider** and **overlay** views.
+- Pixel analysis breakdown: structure fingerprint (pHash + dHash), composition (SSIM), shapes (edge correlation), colour palette (HSV histogram), tone - mirror and zoom/crop copies are detected too. Dominant colour palettes of both images.
+- **AI art-director review** (Gemini): similarity score, risk level, verdict, what is shared, what was changed, and advice. The overall score blends pixels 40 % + AI 60 %.

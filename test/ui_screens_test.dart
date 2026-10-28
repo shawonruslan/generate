@@ -12,6 +12,7 @@ import 'package:ai_image_studio/browser/image_prompt_service.dart';
 import 'package:ai_image_studio/platform_ui.dart';
 import 'package:ai_image_studio/screens/batch_screen.dart';
 import 'package:ai_image_studio/screens/browser_screen.dart';
+import 'package:ai_image_studio/screens/compare_screen.dart';
 import 'package:ai_image_studio/screens/home_screen.dart';
 import 'package:ai_image_studio/screens/settings_screen.dart';
 
@@ -120,4 +121,34 @@ void main() {
     await shot(t, const BatchScreen(), 'batch_desktop',
         w: 1280, h: 1400, dpr: 1);
   }, skip: !on);
+  for (final c in const [('p10_zoom.jpg', 'compare_close', 390.0, 2400.0, 2.0), ('p20.jpg', 'compare_wide', 1280.0, 1000.0, 1.0)]) {
+    testWidgets(c.$2, (t) async {
+      final dir = Platform.environment['AIS_CALIB'] ?? '/data/calib';
+      final a = File('$dir/p10.jpg').readAsBytesSync();
+      final b = File('$dir/${c.$1}').readAsBytesSync();
+      t.view.physicalSize = Size(c.$3 * c.$5, c.$4 * c.$5);
+      t.view.devicePixelRatio = c.$5;
+      await t.pumpWidget(MaterialApp(
+        debugShowCheckedModeBanner: false,
+        theme: AppTheme.light(),
+        darkTheme: AppTheme.dark(),
+        themeMode: ThemeMode.dark,
+        home: CompareScreen(
+            referenceBytes: a, generatedBytes: b, prompt: 'none'),
+      ));
+      for (var i = 0; i < 30; i++) {
+        await t.runAsync(() => Future.delayed(const Duration(milliseconds: 200)));
+        await t.pump(const Duration(milliseconds: 50));
+      }
+      await t.runAsync(() async {
+        for (final e in find.byType(Image).evaluate()) {
+          await precacheImage((e.widget as Image).image, e);
+        }
+      });
+      await t.pump(const Duration(milliseconds: 100));
+      await expectLater(
+          find.byType(MaterialApp), matchesGoldenFile('shots/${c.$2}.png'));
+      t.view.reset();
+    }, skip: !on);
+  }
 }

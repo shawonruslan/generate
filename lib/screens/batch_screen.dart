@@ -27,6 +27,7 @@ import '../secure_store.dart';
 import '../zip_export.dart';
 import '../widgets/device_mockup.dart';
 import 'browser_screen.dart';
+import 'compare_screen.dart';
 import 'settings_screen.dart';
 import '../widgets/ui_kit.dart';
 
@@ -3221,6 +3222,30 @@ class _BatchScreenState extends State<BatchScreen> {
                             Text('Device preview'),
                           ],
                         ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      width: double.infinity,
+                      height: 44,
+                      child: OutlinedButton.icon(
+                        onPressed: () {
+                          Navigator.of(context).pop();
+                          openCompare(context,
+                              generatedBytes: localBytes,
+                              generatedUrl: r.imageUrl,
+                              prompt: r.prompt);
+                        },
+                        style: OutlinedButton.styleFrom(
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12)),
+                          textStyle: const TextStyle(
+                              fontFamily: AppTheme.font,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600),
+                        ),
+                        icon: const Icon(Icons.compare_outlined, size: 18),
+                        label: const Text('Originality check'),
                       ),
                     ),
                     const SizedBox(height: 4),

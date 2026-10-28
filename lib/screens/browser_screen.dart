@@ -1,11 +1,15 @@
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+
+import '../compare/originality.dart';
 
 import '../app_theme.dart';
 import '../browser/chromium_browser.dart';
 import '../browser/image_prompt_service.dart';
 import '../widgets/ui_kit.dart';
 import 'batch_screen.dart';
+import 'compare_screen.dart';
 import 'settings_screen.dart';
 
 /// "Image to Prompt" browser: opens a real Chromium window (no WebView),
@@ -769,6 +773,37 @@ class _BrowserScreenState extends State<BrowserScreen> {
                               Navigator.of(ctx).pop();
                             },
                     ),
+                                    ]),
+                  const SizedBox(height: 10),
+                  ButtonGroup(minItemWidth: 140, children: [
+                    AppButton(
+                      label: 'Check originality',
+                      icon: Icons.compare_outlined,
+                      kind: AppButtonKind.tonal,
+                      tooltip: 'Pick the image you generated from this prompt',
+                      onPressed: () async {
+                        Navigator.of(ctx).pop();
+                        final r = await FilePicker.platform
+                            .pickFiles(type: FileType.image, withData: true);
+                        final b = r?.files.single.bytes;
+                        if (b == null || !mounted) return;
+                        Navigator.of(context).push(MaterialPageRoute(
+                            builder: (_) => CompareScreen(
+                                reference: it,
+                                generatedBytes: b,
+                                prompt: it.prompt)));
+                      },
+                    ),
+                    AppButton(
+                      label: 'More original',
+                      icon: Icons.auto_fix_high,
+                      kind: AppButtonKind.outline,
+                      tooltip: 'Rewrite this prompt at the Bold level',
+                      onPressed: () {
+                        Navigator.of(ctx).pop();
+                        _svc.remixMoreOriginal(it);
+                      },
+                    ),
                   ]),
                 ],
               ),
@@ -861,6 +896,41 @@ class _BrowserScreenState extends State<BrowserScreen> {
                       color: Theme.of(context).colorScheme.onSurfaceVariant)),
             ),
           const SizedBox(height: 12),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Originality',
+                    style: TextStyle(
+                        fontSize: 14.5, fontWeight: FontWeight.w600)),
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: SegmentedButton<CreativityLevel>(
+                    showSelectedIcon: false,
+                    segments: [
+                      for (final l in CreativityLevel.values)
+                        ButtonSegment(value: l, label: Text(l.label)),
+                    ],
+                    selected: {_svc.creativity},
+                    onSelectionChanged: (v) {
+                      _svc.saveSettings(creativity: v.first);
+                      setState(() {});
+                    },
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                    '${_svc.creativity.hint} Every picture gets its own random '
+                    'remix brief, and prompts that read like an earlier one '
+                    'are rewritten automatically.',
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant)),
+              ],
+            ),
+          ),
           ExpansionTile(
             title: const Text('Gemini instruction',
                 style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600)),

@@ -19,6 +19,7 @@ import 'batch_screen.dart';
 import 'browser_screen.dart';
 import 'settings_screen.dart';
 import '../widgets/ui_kit.dart';
+import 'compare_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen(
@@ -920,6 +921,14 @@ class _HomeScreenState extends State<HomeScreen> {
                     icon: Icons.open_in_new_outlined,
                     kind: AppButtonKind.outline,
                     onPressed: _openInBrowser,
+                  ),
+                                  AppButton(
+                    label: 'Originality',
+                    icon: Icons.compare_outlined,
+                    kind: AppButtonKind.outline,
+                    tooltip: 'Compare with the reference picture',
+                    onPressed: () => openCompare(context,
+                        generatedUrl: r.imageUrl, prompt: r.prompt),
                   ),
                 ]),
               ],

@@ -1,9 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:isolate';
 
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 import 'package:image/image.dart' as img;
+import 'package:path_provider/path_provider.dart';
+
+import '../compare/originality.dart';
 
 import '../gemini_session_manager.dart';
 import '../gemini_web.dart';
@@ -66,6 +71,9 @@ class ImagePromptItem {
   /// Bytes downloaded when the picture was ticked (not persisted), so it
   /// still works after the user navigated away from its page.
   FetchedImage? cached;
+
+  /// One-shot creativity override ("More original" remix; not persisted).
+  CreativityLevel? forceLevel;
 
   bool get isThumbnailable =>
       src.startsWith('http://') || src.startsWith('https://');
@@ -211,6 +219,7 @@ class ImagePromptService extends ChangeNotifier {
   static const _kItems = 'img_prompt_items';
   static const _kInstruction = 'img_prompt_instruction';
   static const _kInstrRev = 'img_prompt_instruction_rev';
+  static const _kCreativity = 'img_prompt_creativity';
   static const _kAutoAdd = 'img_prompt_auto_add';
   static const _kExe = 'img_prompt_browser_path';
   static const _kSource = 'img_prompt_cookie_source';
@@ -321,6 +330,9 @@ class ImagePromptService extends ChangeNotifier {
 
   String instruction = defaultInstruction;
   bool autoAddToList = true;
+
+  /// How far prompts move away from the reference (originality brief).
+  CreativityLevel creativity = CreativityLevel.creative;
   String browserPath = '';
   String homeUrl = 'https://www.pinterest.com/';
   GeminiCookieSource cookieSource = GeminiCookieSource.auto;
@@ -378,6 +390,9 @@ class ImagePromptService extends ChangeNotifier {
         await p.setInt(_kInstrRev, 2);
       }
       autoAddToList = p.getBool(_kAutoAdd) ?? true;
+      creativity = CreativityLevel.values.firstWhere(
+          (c) => c.name == p.getString(_kCreativity),
+          orElse: () => CreativityLevel.creative);
       browserPath = p.getString(_kExe) ?? '';
       homeUrl = p.getString(_kHome) ?? homeUrl;
       cookieSource = GeminiCookieSource.values.firstWhere(
@@ -408,6 +423,7 @@ class ImagePromptService extends ChangeNotifier {
   Future<void> saveSettings({
     String? instruction,
     bool? autoAddToList,
+    CreativityLevel? creativity,
     String? browserPath,
     String? homeUrl,
     GeminiCookieSource? cookieSource,
@@ -417,6 +433,7 @@ class ImagePromptService extends ChangeNotifier {
           instruction.trim().isEmpty ? defaultInstruction : instruction;
     }
     if (autoAddToList != null) this.autoAddToList = autoAddToList;
+    if (creativity != null) this.creativity = creativity;
     if (browserPath != null) this.browserPath = browserPath.trim();
     if (homeUrl != null) this.homeUrl = homeUrl.trim();
     if (cookieSource != null) {
@@ -429,6 +446,7 @@ class ImagePromptService extends ChangeNotifier {
       final p = await AppPrefs.prefs();
       await p.setString(_kInstruction, this.instruction);
       await p.setBool(_kAutoAdd, this.autoAddToList);
+      await p.setString(_kCreativity, this.creativity.name);
       await p.setString(_kExe, this.browserPath);
       await p.setString(_kHome, this.homeUrl);
       await p.setString(_kSource, this.cookieSource.name);
@@ -983,20 +1001,69 @@ class ImagePromptService extends ChangeNotifier {
     _browser?.notifyPage(it.sessionId, it.src, 'running');
     try {
       final pic = await _download(it);
-      final hook = debugAnswer;
-      final reply = hook != null
-          ? await hook(pic.bytes)
-          : await (await _gemini()).askWithImage(
-        instruction,
-        pic.bytes,
-        filename: pic.mimeType == 'image/png' ? 'image.png' : 'image.jpg',
-        mimeType: pic.mimeType,
-        completeWhen: instruction.contains('[/PROMPT]')
-            ? RegExp(r'\\?\[/PROMPT\\?\]', caseSensitive: false)
-            : null,
-      );
-      final prompt = extractPrompt(reply);
+      unawaited(_saveReference(it.id, pic.bytes));
+      final level = it.forceLevel ?? creativity;
+      it.forceLevel = null;
+      // The originality brief is skipped for the faithful instruction
+      // ("Exact copy") and the faithful level.
+      final brief = instruction != faithfulInstruction &&
+          level != CreativityLevel.faithful;
+      final seed = it.id.hashCode ^ DateTime.now().microsecondsSinceEpoch;
+      Future<String> ask(String boost) {
+        final full = brief
+            ? '$instruction${variationBrief(level, seed, boost: boost)}'
+            : instruction;
+        final hook = debugAnswer;
+        if (hook != null) return hook(pic.bytes);
+        return _gemini().then((g) => g.askWithImage(
+              full,
+              pic.bytes,
+              filename:
+                  pic.mimeType == 'image/png' ? 'image.png' : 'image.jpg',
+              mimeType: pic.mimeType,
+              completeWhen: full.contains('[/PROMPT]')
+                  ? RegExp(r'\\?\[/PROMPT\\?\]', caseSensitive: false)
+                  : null,
+            ));
+      }
+
+      final remix = level == CreativityLevel.bold && it.prompt.isNotEmpty;
+      final previous = it.prompt;
+      var prompt = extractPrompt(await ask(remix
+          ? 'A previous prompt for this picture was judged TOO SIMILAR to the '
+              'reference. Push further: new subject identity, new setting, '
+              'new camera angle and a new colour accent.'
+          : ''));
       if (prompt.isEmpty) throw GeminiWebException('Gemini returned no prompt.');
+      // Anti-repeat: a board full of look-alike pictures must not turn
+      // into look-alike prompts. One rewrite when too close to an earlier
+      // prompt (or to this picture's previous prompt).
+      if (brief) {
+        final others = <String>[
+          if (previous.isNotEmpty) previous,
+          for (final o in items)
+            if (!identical(o, it) &&
+                o.state == ImagePromptState.done &&
+                o.prompt.isNotEmpty)
+              o.prompt,
+        ].take(41).toList();
+        final sim = maxPromptSimilarity(prompt, others);
+        if (sim > 0.40) {
+          status = 'Prompt looked like an earlier one '
+              '(${(sim * 100).round()}%), rewriting it more originally...';
+          notifyListeners();
+          final again = extractPrompt(await ask(
+              'Your first answer was ${(sim * 100).round()}% identical in '
+              'wording to another prompt of this session. Write a clearly '
+              'different scene: other subject details, other setting, other '
+              'camera angle and other colour accents.'));
+          if (again.isNotEmpty &&
+              maxPromptSimilarity(again, others) < sim) {
+            prompt = again;
+          }
+        }
+      }
+      if (remix && previous.isNotEmpty) it.addedToList = false;
       it.prompt = prompt;
       it.state = ImagePromptState.done;
       if (!it.isCapture) it.cached = null; // free memory (captures keep theirs)
@@ -1023,11 +1090,149 @@ class ImagePromptService extends ChangeNotifier {
     _saveItems();
   }
 
+  // ------------------------------------------------------ compare support
+  static Directory? _refDir;
+
+  static Future<File> _refFile(String id) async {
+    final d = _refDir ??= Directory(
+        '${(await getApplicationSupportDirectory()).path}${Platform.pathSeparator}prompt_refs');
+    final safe = id.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+    return File('${d.path}${Platform.pathSeparator}$safe.jpg');
+  }
+
+  /// Keeps a 768 px JPEG of every analysed picture so the result can be
+  /// compared later (also after restarts, and for captures).
+  Future<void> _saveReference(String id, Uint8List bytes) async {
+    try {
+      final jpg = await Isolate.run(() {
+        final d = img.decodeImage(bytes);
+        if (d == null) return null;
+        final t = d.width >= d.height
+            ? (d.width > 768 ? img.copyResize(d, width: 768) : d)
+            : (d.height > 768 ? img.copyResize(d, height: 768) : d);
+        return Uint8List.fromList(img.encodeJpg(t, quality: 88));
+      });
+      if (jpg == null) return;
+      final f = await _refFile(id);
+      await f.parent.create(recursive: true);
+      await f.writeAsBytes(jpg, flush: true);
+    } catch (_) {}
+  }
+
+  /// Best available bytes of the reference picture of [it].
+  Future<Uint8List?> referenceBytes(ImagePromptItem it) async {
+    try {
+      final f = await _refFile(it.id);
+      if (await f.exists()) return await f.readAsBytes();
+    } catch (_) {}
+    if (it.cached != null) return it.cached!.bytes;
+    for (final u in [it.hiSrc, it.src]) {
+      if (!u.startsWith('http')) continue;
+      try {
+        final r = await http.get(Uri.parse(u), headers: {
+          'User-Agent': 'Mozilla/5.0',
+          if (it.pageUrl.startsWith('http')) 'Referer': it.pageUrl,
+        }).timeout(const Duration(seconds: 30));
+        if (r.statusCode == 200 && r.bodyBytes.length > 500) {
+          return r.bodyBytes;
+        }
+      } catch (_) {}
+    }
+    return it.preview;
+  }
+
+  /// The Image-to-Prompt item whose prompt produced [generatedPrompt]
+  /// (set prompts carry extra suffixes, so containment is enough).
+  ImagePromptItem? referenceFor(String generatedPrompt) {
+    final g = PromptListBridge.key(generatedPrompt);
+    if (g.isEmpty) return null;
+    ImagePromptItem? best;
+    var bestScore = 0.0;
+    for (final it in items) {
+      if (it.prompt.isEmpty) continue;
+      final k = PromptListBridge.key(it.prompt);
+      if (k.length < 20) continue;
+      final score = g.contains(k)
+          ? 1.0 + k.length / 100000
+          : promptSimilarity(it.prompt, generatedPrompt);
+      if (score > bestScore) {
+        bestScore = score;
+        best = it;
+      }
+    }
+    return bestScore >= 0.6 ? best : null;
+  }
+
+  /// Re-writes the prompt of [it] at the Bold level ("too similar" fix);
+  /// the new prompt is added to the batch list again.
+  void remixMoreOriginal(ImagePromptItem it) {
+    it.forceLevel = CreativityLevel.bold;
+    it.state = ImagePromptState.queued;
+    it.error = '';
+    status = 'Writing a more original prompt...';
+    notifyListeners();
+    _saveItems();
+    _pump();
+  }
+
+  /// Professional visual review by Gemini: both pictures side by side
+  /// (A = reference, B = new) with a strict scoring format.
+  Future<AiCompareReview> aiReview(Uint8List reference, Uint8List generated) async {
+    final sheet = await Isolate.run(() => _compareSheet(reference, generated));
+    if (sheet == null) throw GeminiWebException('Could not read the pictures.');
+    final reply = await (await _gemini()).askWithImage(
+      aiReviewInstruction,
+      sheet,
+      filename: 'compare.jpg',
+      mimeType: 'image/jpeg',
+      completeWhen: RegExp(r'\\?\[/REVIEW\\?\]', caseSensitive: false),
+    );
+    return AiCompareReview.parse(reply);
+  }
+
+  static const aiReviewInstruction =
+      'You are an art director and copyright-risk reviewer for a wallpaper '
+      'store. The attached sheet shows two pictures side by side: A (left) '
+      'is the REFERENCE found online, B (right) is the NEW AI-generated '
+      'picture made from a prompt inspired by A. Judge only what you see. '
+      'Score how similar B is to A as a whole (0 = completely unrelated, '
+      '100 = the same picture), weighing: subject identity and design, '
+      'pose, composition and framing, background and props, colour palette, '
+      'lighting, style/medium, and any distinctive or protectable element '
+      '(characters, logos, unique artwork layout). Shared genre or mood '
+      'alone is NOT copying. Return exactly this format and nothing else:\n'
+      '[REVIEW]\n'
+      'similarity: <0-100>\n'
+      'risk: <low|medium|high>\n'
+      'verdict: <one professional sentence>\n'
+      'kept: <3-5 short items separated by ; - what B shares with A>\n'
+      'changed: <3-5 short items separated by ; - what B does differently>\n'
+      'advice: <one sentence: what to change to make B more original, or "none">\n'
+      '[/REVIEW]';
+
+  static Uint8List? _compareSheet(Uint8List a, Uint8List b) {
+    final ia = img.decodeImage(a), ib = img.decodeImage(b);
+    if (ia == null || ib == null) return null;
+    const h = 900, gap = 28, top = 44;
+    final ra = img.copyResize(ia, height: h, interpolation: img.Interpolation.average);
+    final rb = img.copyResize(ib, height: h, interpolation: img.Interpolation.average);
+    final sheet = img.Image(width: ra.width + rb.width + gap * 3, height: h + top + gap);
+    img.fill(sheet, color: img.ColorRgb8(24, 24, 28));
+    img.compositeImage(sheet, ra, dstX: gap, dstY: top);
+    img.compositeImage(sheet, rb, dstX: gap * 2 + ra.width, dstY: top);
+    final white = img.ColorRgb8(255, 255, 255);
+    img.drawString(sheet, 'A - REFERENCE', font: img.arial24, x: gap, y: 10, color: white);
+    img.drawString(sheet, 'B - NEW', font: img.arial24, x: gap * 2 + ra.width, y: 10, color: white);
+    return Uint8List.fromList(img.encodeJpg(sheet, quality: 90));
+  }
+
   Future<FetchedImage> _download(ImagePromptItem it) async {
     final b = _browser;
     FetchedImage raw;
     if (it.cached != null) {
       raw = it.cached!;
+    } else if (it.isCapture && await _refFile(it.id).then((f) => f.exists())) {
+      raw = FetchedImage(await (await _refFile(it.id)).readAsBytes(), 'image/jpeg');
     } else if (it.isCapture) {
       throw GeminiWebException('This capture is no longer in memory '
           '(app was restarted) - capture it again.');
@@ -1135,5 +1340,62 @@ class ImagePromptService extends ChangeNotifier {
       t = t.substring(1, t.length - 1).trim();
     }
     return t.replaceAll(RegExp(r'\s*\n\s*'), ' ').trim();
+  }
+}
+
+
+/// Parsed Gemini visual review of a reference vs generated picture.
+class AiCompareReview {
+  AiCompareReview({
+    required this.similarity,
+    required this.risk,
+    required this.verdict,
+    required this.kept,
+    required this.changed,
+    required this.advice,
+  });
+  final int similarity;
+  final String risk;
+  final String verdict;
+  final List<String> kept;
+  final List<String> changed;
+  final String advice;
+
+  static AiCompareReview parse(String reply) {
+    var t = reply.replaceAll(r'\[', '[').replaceAll(r'\]', ']');
+    final m = RegExp(r'\[REVIEW\]([\s\S]*?)(\[/REVIEW\]|$)', caseSensitive: false)
+        .firstMatch(t);
+    if (m != null) t = m.group(1)!;
+    String field(String k) {
+      final r = RegExp('^\\s*[*_]*$k[*_]*\\s*[:=-]\\s*(.+)\$',
+              caseSensitive: false, multiLine: true)
+          .firstMatch(t);
+      return (r?.group(1) ?? '').replaceAll('**', '').trim();
+    }
+
+    List<String> list(String k) => field(k)
+        .split(RegExp(r'\s*;\s*'))
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList();
+    final sim = int.tryParse(
+            RegExp(r'\d{1,3}').firstMatch(field('similarity'))?.group(0) ?? '') ??
+        -1;
+    if (sim < 0) {
+      throw GeminiWebException('Gemini did not return a similarity score.');
+    }
+    final risk = field('risk').toLowerCase();
+    return AiCompareReview(
+      similarity: sim.clamp(0, 100),
+      risk: risk.contains('high')
+          ? 'high'
+          : risk.contains('med')
+              ? 'medium'
+              : 'low',
+      verdict: field('verdict'),
+      kept: list('kept'),
+      changed: list('changed'),
+      advice: field('advice'),
+    );
   }
 }
