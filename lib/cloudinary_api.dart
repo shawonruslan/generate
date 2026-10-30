@@ -522,6 +522,17 @@ class ExportPresets {
   /// Delivery URL for [url] under the preset at [index].
   static String displayUrl(String url, int index) {
     final t = all[index.clamp(0, all.length - 1)].transformation;
-    return t == null ? url : transformImageUrl(url, t);
+    if (t == null) return url;
+    // Images drawn on this device (Gemini web engine): the local server
+    // does the same fill-crop + JPG.
+    if (url.startsWith('http://127.0.0.1:') && !url.contains('?')) {
+      final w = RegExp(r'w_(\d+)').firstMatch(t)?.group(1);
+      final h = RegExp(r'h_(\d+)').firstMatch(t)?.group(1);
+      if (w != null && h != null) {
+        return '$url?fill=${w}x$h${t.contains('f_jpg') ? '&f=jpg' : ''}';
+      }
+      return url;
+    }
+    return transformImageUrl(url, t);
   }
 }

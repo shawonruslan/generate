@@ -10,6 +10,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../cloudinary_api.dart';
+import '../gemini_image_api.dart';
 import '../keep_awake.dart';
 import '../app_theme.dart';
 import '../models.dart';
@@ -152,7 +153,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _generate() async {
     final prompt = _promptCtrl.text.trim();
     if (prompt.isEmpty || _loading) return;
-    if (!_creds.isComplete) {
+    if (!ImageEngine.isGemini && !_creds.isComplete) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -176,7 +177,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _result = null;
       _status = 'Sending request...';
     });
-    final api = CloudinaryApi(_creds);
+    final api = ImageEngine.api(_creds);
     // Keeps the phone awake until this image is done (Android).
     KeepAwake.start('single', 'Generating image');
     try {
@@ -480,7 +481,8 @@ class _HomeScreenState extends State<HomeScreen> {
           onSelectionChanged: (s) => setState(() => _tab = s.first),
         ),
         const SizedBox(height: 12),
-        if (!_creds.isComplete) _credentialsWarning(scheme),
+        if (!ImageEngine.isGemini && !_creds.isComplete)
+          _credentialsWarning(scheme),
         _sectionCard(
           title: 'Prompt',
           icon: Icons.edit_outlined,

@@ -979,6 +979,10 @@ class ImagePromptService extends ChangeNotifier {
     return picked.length;
   }
 
+  /// Signed-in Gemini web client (Chromium window, Gecko or saved
+  /// cookies) - also used for Gemini image generation.
+  Future<GeminiWebClient> geminiClient() => _gemini();
+
   Future<GeminiWebClient> _gemini() async {
     // Saved cookie session from Settings.
     Future<GeminiWebClient?> saved() async {

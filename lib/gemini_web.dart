@@ -349,10 +349,26 @@ class GeminiWebTestResult {
 
 /// Response of a request made inside the signed-in browser.
 class GeminiPageResponse {
-  const GeminiPageResponse(this.status, this.url, this.body);
+  const GeminiPageResponse(this.status, this.url, this.body,
+      {this.bytes, this.contentType = ''});
   final int status;
   final String url;
   final String body;
+
+  /// Raw body when the response was an image (else null).
+  final Uint8List? bytes;
+  final String contentType;
+}
+
+/// Image(s) Gemini web drew for one prompt.
+class GeminiGeneratedImages {
+  const GeminiGeneratedImages(this.urls, this.text);
+
+  /// lh3.googleusercontent.com/gg-dl/... download links, in order.
+  final List<String> urls;
+
+  /// Text Gemini wrote next to the image (may be empty).
+  final String text;
 }
 
 /// Runs Gemini web requests INSIDE the signed-in browser (a
@@ -381,7 +397,11 @@ class GeminiWebClient {
   /// When set and available, every request runs inside the browser.
   final GeminiPageTransport? transport;
 
-  bool get _viaPage => transport?.isAvailable ?? false;
+  bool get _viaPage => !_pageBroken && (transport?.isAvailable ?? false);
+
+  /// Set when a request inside the browser tab timed out or failed: the
+  /// rest of this session uses the direct cookie path instead.
+  bool _pageBroken = false;
 
   /// App-side cookie renewal (RotateCookies). OFF by default: renewing a
   /// session that is also open in a browser (the app's sign-in browser or
@@ -635,11 +655,13 @@ class GeminiWebClient {
               timeout: timeout)
           .timeout(timeout + const Duration(seconds: 10));
     } on TimeoutException {
+      _pageBroken = true;
       throw GeminiWebException(
           'Gemini (in the browser) did not respond within ${timeout.inSeconds}s.');
     } on GeminiWebException {
       rethrow;
     } catch (e) {
+      _pageBroken = true;
       throw GeminiWebException('Gemini request in the browser failed: $e');
     }
   }
@@ -821,6 +843,11 @@ class GeminiWebClient {
   }
 
   Future<String> _send(String prompt,
+          {required Duration timeout,
+          List<GeminiWebUpload> files = const []}) async =>
+      _parseStream(await _sendRaw(prompt, timeout: timeout, files: files));
+
+  Future<String> _sendRaw(String prompt,
       {required Duration timeout,
       List<GeminiWebUpload> files = const []}) async {
     final at = _at;
@@ -894,7 +921,167 @@ class GeminiWebClient {
     if (res.statusCode != 200) {
       throw GeminiWebException('Gemini web HTTP ${res.statusCode}.');
     }
-    return _parseStream(res.text);
+    return res.text;
+  }
+
+  /// Asks Gemini web to DRAW [prompt] (the same request the Gemini page
+  /// sends; image generation is chosen by Gemini from the wording).
+  /// [files] are uploaded reference pictures (image editing / remix).
+  Future<GeminiGeneratedImages> generateImages(
+    String prompt, {
+    List<GeminiWebUpload> files = const [],
+    Duration timeout = const Duration(seconds: 240),
+    int attempts = 2,
+  }) async {
+    if (!ready) await init();
+    Object? lastErr;
+    for (var i = 0; i < attempts; i++) {
+      newChat();
+      try {
+        final raw = await _sendRaw(prompt, timeout: timeout, files: files);
+        final urls = generatedImageUrls(raw);
+        var text = '';
+        try {
+          text = _parseStream(raw);
+        } catch (_) {}
+        if (urls.isNotEmpty) return GeminiGeneratedImages(urls, text);
+        if (raw.contains('accounts.google.com') ||
+            raw.contains('ServiceLogin')) {
+          throw GeminiWebException(
+              'The Gemini session expired. Sign in again.',
+              expired: true);
+        }
+        final t = text.replaceAll(RegExp(r'\s+'), ' ').trim();
+        lastErr = t.isEmpty
+            ? 'Gemini returned no image.'
+            : 'Gemini replied without an image: '
+                '"${t.substring(0, t.length.clamp(0, 160))}"';
+      } on GeminiWebException catch (e) {
+        lastErr = e.message;
+        if (e.expired) {
+          _at = null;
+          if (i == attempts - 1) rethrow;
+          await init();
+        }
+      } on TimeoutException {
+        lastErr = 'Gemini image generation timed out after '
+            '${timeout.inSeconds}s.';
+      } catch (e) {
+        lastErr = e.toString();
+      }
+      if (i < attempts - 1) await Future.delayed(const Duration(seconds: 3));
+    }
+    throw GeminiWebException('$lastErr');
+  }
+
+  static final RegExp _genUrl = RegExp(
+      r'^https://[a-z0-9.-]*(googleusercontent\.com|usercontent\.google\.com)'
+      r'/(rd-)?gg-dl/',
+      caseSensitive: false);
+
+  /// Generated-image links inside a StreamGenerate reply (any depth).
+  static List<String> generatedImageUrls(String raw) {
+    final out = <String>[];
+    void walk(dynamic n) {
+      if (n is String) {
+        if (_genUrl.hasMatch(n) && !out.contains(n)) out.add(n);
+      } else if (n is List) {
+        for (final e in n) {
+          walk(e);
+        }
+      } else if (n is Map) {
+        for (final e in n.values) {
+          walk(e);
+        }
+      }
+    }
+
+    for (final line in LineSplitter.split(raw)) {
+      final t = line.trim();
+      if (!t.startsWith('[')) continue;
+      dynamic chunk;
+      try {
+        chunk = jsonDecode(t);
+      } catch (_) {
+        continue;
+      }
+      if (chunk is! List) continue;
+      for (final entry in chunk) {
+        if (entry is List &&
+            entry.length > 2 &&
+            entry[0] == 'wrb.fr' &&
+            entry[2] is String) {
+          try {
+            walk(jsonDecode(entry[2] as String));
+          } catch (_) {}
+        }
+      }
+    }
+    return out;
+  }
+
+  /// Download link for [url] at [size] px (long side), as the Gemini page
+  /// asks for it: `=s<size>-rj?alr=yes`.
+  static String sizedImageUrl(String url, int size) {
+    var base = url.split('?').first;
+    final slash = base.lastIndexOf('/');
+    final eq = base.indexOf('=', slash < 0 ? 0 : slash);
+    if (eq > 0) base = base.substring(0, eq);
+    return '$base=s$size-rj?alr=yes';
+  }
+
+  /// Downloads a generated image. The link answers with the next link
+  /// as text (gg-dl -> usercontent -> rd-gg-dl) until the JPEG/PNG
+  /// itself; every hop needs the signed-in Google session.
+  Future<Uint8List> downloadGeneratedImage(String url,
+      {int size = 2048,
+      Duration timeout = const Duration(seconds: 90)}) async {
+    final first = sizedImageUrl(url, size);
+    if (_viaPage) {
+      try {
+        return await _hops(first, timeout, page: true);
+      } catch (_) {
+        // fall through to the direct cookie path
+      }
+    }
+    return _hops(first, timeout, page: false);
+  }
+
+  Future<Uint8List> _hops(String url, Duration timeout,
+      {required bool page}) async {
+    var u = url;
+    for (var hop = 0; hop < 6; hop++) {
+      if (page) {
+        final r = await transport!.request('GET', u, timeout: timeout);
+        final b = r.bytes;
+        if (b != null && b.isNotEmpty) return b;
+        final next = r.body.trim();
+        if (r.status == 200 && next.startsWith('http')) {
+          u = next;
+          continue;
+        }
+        throw GeminiWebException(
+            'Image download from Gemini failed (HTTP ${r.status}).');
+      }
+      final res = await http.get(Uri.parse(u), headers: {
+        'Cookie': session.cookieHeader,
+        'User-Agent': geminiWebUserAgent,
+        'Origin': 'https://gemini.google.com',
+        'Referer': 'https://gemini.google.com/',
+      }).timeout(timeout);
+      final ct = res.headers['content-type'] ?? '';
+      if (res.statusCode == 200 && ct.startsWith('image/')) {
+        return res.bodyBytes;
+      }
+      final next = utf8.decode(res.bodyBytes, allowMalformed: true).trim();
+      if (res.statusCode == 200 && next.startsWith('http')) {
+        u = next;
+        continue;
+      }
+      throw GeminiWebException(
+          'Image download from Gemini failed (HTTP ${res.statusCode}).');
+    }
+    throw GeminiWebException('Image download from Gemini: too many hops.');
   }
 
   /// Parses the `)]}'`-prefixed chunked batchexecute stream and returns the

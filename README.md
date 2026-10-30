@@ -266,6 +266,28 @@ JPEG only, **2800x2400 (7:6 = 1.4:1.2)**, max 25 MP, max 8 MB, and an **extensio
 - Anti-repeat is now a switch and only runs for targets up to 75 %. It keeps the same target when it rewrites.
 - Every prompt remembers its target. The compare view shows **Target vs measured** (on target / more different / closer) with *Less similar* and *Closer to reference* rewrite buttons.
 
+## v1.14.0 - Gemini web image engine (no Cloudinary needed)
+
+- Settings -> **Image engine**: Cloudinary or **Gemini web**. With Gemini web, every image (Home text / image to image, Batch anchors and chained variants) is drawn by your signed-in Gemini web session. No Cloudinary keys or credits needed.
+- Same request as the Gemini page (StreamGenerate). The generated `gg-dl` link is downloaded through its redirect chain (`=s2048-rj?alr=yes` -> usercontent -> `rd-gg-dl` JPEG), which the HAR capture showed. On Windows this runs inside the signed-in browser tab; it falls back to cookies, which is also the Android path.
+- Reference images are uploaded to Gemini. `[n]` in the prompt becomes "attached image n".
+- The result is centre-cropped to the chosen aspect ratio, saved on the device and served from `http://127.0.0.1:47823`, so preview, download, share, mockups and compare work unchanged. The 1620x2880 JPG export preset is done locally.
+- Requests run one at a time (the Gemini web conversation is stateful). Gemini's own image limits apply.
+
+## v1.13.0 - Smart generation (fast, no image_to_image)
+
+- Image to Prompt needs **one** Gemini call: element list, keep/change plan and prompt come back in one answer. The source palette and exposure are read locally and saved with the prompt.
+- A Smart prompt is generated with ONE text_to_image request: palette from 40 %, exposure from 55 %. No reference upload, no measuring, no AI judge, no regeneration.
+- The Batch switch is now called "Smart generation".
+
+## v1.12.3 - One image per anchor (no silent regenerate)
+
+- Extra tries default to 0, so the app no longer regenerates when the similarity target is missed.
+
+## v1.12.2 - Generation never hangs on Gemini
+
+- If a Gemini request inside the browser tab times out or fails, the client falls back to direct cookies for the rest of the session.
+
 ## v1.12.1 - No more "logged out after 5 minutes"
 
 - Cause: the app renewed (RotateCookies) the same Google session that was

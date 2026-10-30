@@ -15,6 +15,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../cloudinary_api.dart';
+import '../gemini_image_api.dart';
 import '../app_theme.dart';
 import '../browser/image_prompt_service.dart';
 import '../distribute.dart';
@@ -457,7 +458,7 @@ class _BatchScreenState extends State<BatchScreen> {
       _snack('Mix counts must add up to the number of prompts.');
       return;
     }
-    if (!_creds.isComplete) {
+    if (!ImageEngine.isGemini && !_creds.isComplete) {
       _snack('Add your Cloudinary credentials first.');
       await _openSettings();
       return;
@@ -924,7 +925,7 @@ class _BatchScreenState extends State<BatchScreen> {
   }
 
   Future<void> _runJobsAwake(List<BatchJob> jobs) async {
-    final api = CloudinaryApi(_creds);
+    final api = ImageEngine.api(_creds);
     final seedBase = int.tryParse(_seedCtrl.text.trim());
     // No seed entered: use a fresh random seed per job. Cloudinary returns
     // the same cached image for an identical seedless request, which made

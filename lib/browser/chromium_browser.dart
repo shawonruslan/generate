@@ -691,7 +691,16 @@ class ChromiumBrowser implements PromptBrowser, GeminiPageTransport {
   init.signal = ctl.signal;
   try {
     const r = await fetch(o.u, init);
-    return JSON.stringify({ s: r.status, u: r.url, b: await r.text() });
+    const ct = r.headers.get('content-type') || '';
+    if (ct.startsWith('image/')) {
+      const buf = new Uint8Array(await r.arrayBuffer());
+      let bin = '';
+      for (let i = 0; i < buf.length; i += 32768) {
+        bin += String.fromCharCode.apply(null, buf.subarray(i, i + 32768));
+      }
+      return JSON.stringify({ s: r.status, u: r.url, b: '', ct, x: btoa(bin) });
+    }
+    return JSON.stringify({ s: r.status, u: r.url, b: await r.text(), ct });
   } catch (e) {
     return JSON.stringify({ s: 0, u: o.u, b: '', e: String(e) });
   } finally {
@@ -713,8 +722,11 @@ class ChromiumBrowser implements PromptBrowser, GeminiPageTransport {
         if (v is! String) throw 'no result';
         final j = jsonDecode(v) as Map<String, dynamic>;
         if (j['e'] != null) throw 'fetch failed: ${j['e']}';
+        final x = j['x'];
         return GeminiPageResponse((j['s'] as num).toInt(),
-            (j['u'] ?? url).toString(), (j['b'] ?? '').toString());
+            (j['u'] ?? url).toString(), (j['b'] ?? '').toString(),
+            bytes: x is String && x.isNotEmpty ? base64Decode(x) : null,
+            contentType: (j['ct'] ?? '').toString());
       } catch (e) {
         // Tab closed / navigated away: open a fresh one once.
         _gemSession = null;

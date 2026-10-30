@@ -4,6 +4,7 @@ import 'app_theme.dart';
 import 'screens/home_screen.dart';
 import 'secure_store.dart';
 import 'gemini_web.dart';
+import 'gemini_image_api.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -12,6 +13,7 @@ Future<void> main() async {
     GeminiWebClient.allowAppRotation =
         p.getBool('gemini_app_rotation') ?? false;
   } catch (_) {}
+  await ImageEngine.load();
   runApp(const AiImageStudioApp());
 }
 
