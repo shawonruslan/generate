@@ -138,8 +138,9 @@ class GeminiImageApi extends CloudinaryApi {
         final out = await client.generateImages(
             geminiDrawPrompt(prompt, aspectRatio, refs.length),
             files: files);
-        final raw = await client.downloadGeneratedImage(out.urls.first,
-            size: resolution.toLowerCase().contains('4k') ? 4096 : 2048);
+        final raw = out.bytes ??
+            await client.downloadGeneratedImage(out.urls.first,
+                size: resolution.toLowerCase().contains('4k') ? 4096 : 2048);
         final png = format.toLowerCase() == 'png';
         final fitted =
             await Isolate.run(() => fitToAspect(raw, aspectRatio, png: png));

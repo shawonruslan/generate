@@ -361,8 +361,17 @@ class GeminiPageResponse {
 }
 
 /// Image(s) Gemini web drew for one prompt.
+/// Browser that can open a Gemini chat and hand over the picture the
+/// page shows (`generated-image img.image`, a blob: URL).
+abstract class GeminiChatImageReader {
+  Future<Uint8List?> chatImage(String conversationId, {Duration timeout});
+}
+
 class GeminiGeneratedImages {
-  const GeminiGeneratedImages(this.urls, this.text);
+  const GeminiGeneratedImages(this.urls, this.text, {this.bytes});
+
+  /// The picture itself when it was taken from the page (no download).
+  final Uint8List? bytes;
 
   /// lh3.googleusercontent.com/gg-dl/... download links, in order.
   final List<String> urls;
@@ -939,12 +948,45 @@ class GeminiWebClient {
       newChat();
       try {
         final raw = await _sendRaw(prompt, timeout: timeout, files: files);
-        final urls = generatedImageUrls(raw);
+        var urls = generatedImageUrls(raw);
         var text = '';
         try {
           text = _parseStream(raw);
         } catch (_) {}
         if (urls.isNotEmpty) return GeminiGeneratedImages(urls, text);
+        // The picture is often finished AFTER the stream closes (the
+        // page shows it a few seconds later): read the chat back, as the
+        // Gemini page does, until the image link is there.
+        final cid = conversationIdFrom(raw) ?? _cid;
+        String chat = '';
+        final reader = transport;
+        if (cid != null &&
+            cid.isNotEmpty &&
+            reader is GeminiChatImageReader &&
+            (transport?.isAvailable ?? false)) {
+          // Windows: open the chat in the signed-in browser and take the
+          // picture the page shows.
+          try {
+            final b = await (reader as GeminiChatImageReader)
+                .chatImage(cid, timeout: const Duration(seconds: 120));
+            if (b != null && b.isNotEmpty) {
+              return GeminiGeneratedImages(const [], text, bytes: b);
+            }
+          } catch (_) {}
+        }
+        if (cid != null && cid.isNotEmpty) {
+          final until = DateTime.now().add(const Duration(seconds: 60));
+          while (urls.isEmpty && DateTime.now().isBefore(until)) {
+            await Future.delayed(const Duration(seconds: 4));
+            try {
+              chat = await _readChat(cid);
+              urls = generatedImageUrls(chat);
+            } catch (_) {}
+          }
+          if (urls.isNotEmpty) return GeminiGeneratedImages(urls, text);
+        }
+        lastReplyFile = await _dumpReply(
+            'prompt-stream:\n$raw\n\nread-chat ($cid):\n$chat');
         if (raw.contains('accounts.google.com') ||
             raw.contains('ServiceLogin')) {
           throw GeminiWebException(
@@ -952,10 +994,12 @@ class GeminiWebClient {
               expired: true);
         }
         final t = text.replaceAll(RegExp(r'\s+'), ' ').trim();
+        final where =
+            lastReplyFile == null ? '' : ' (reply saved to $lastReplyFile)';
         lastErr = t.isEmpty
-            ? 'Gemini returned no image.'
+            ? 'Gemini made no readable image link$where.'
             : 'Gemini replied without an image: '
-                '"${t.substring(0, t.length.clamp(0, 160))}"';
+                '"${t.substring(0, t.length.clamp(0, 160))}"$where';
       } on GeminiWebException catch (e) {
         lastErr = e.message;
         if (e.expired) {
@@ -974,9 +1018,91 @@ class GeminiWebClient {
     throw GeminiWebException('$lastErr');
   }
 
+  /// Where the last reply without an image was saved (for support).
+  static String? lastReplyFile;
+
+  static Future<String?> _dumpReply(String text) async {
+    try {
+      final f = File('${Directory.systemTemp.path}'
+          '${Platform.pathSeparator}ais_gemini_last_reply.txt');
+      await f.writeAsString(text);
+      return f.path;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Conversation id (c_...) of a StreamGenerate reply.
+  static String? conversationIdFrom(String raw) {
+    String? found;
+    void walk(dynamic n, int depth) {
+      if (found != null || depth > 6) return;
+      if (n is String) {
+        if (RegExp(r'^c_[0-9a-f]{8,}$').hasMatch(n)) found = n;
+      } else if (n is List) {
+        for (final e in n) {
+          walk(e, depth + 1);
+        }
+      }
+    }
+
+    for (final line in LineSplitter.split(raw)) {
+      final t = line.trim();
+      if (!t.startsWith('[')) continue;
+      try {
+        final chunk = jsonDecode(t);
+        if (chunk is! List) continue;
+        for (final e in chunk) {
+          if (e is List && e.length > 2 && e[0] == 'wrb.fr' && e[2] is String) {
+            walk(jsonDecode(e[2] as String), 0);
+            if (found != null) return found;
+          }
+        }
+      } catch (_) {}
+    }
+    return found;
+  }
+
+  /// Reads a conversation back (batchexecute hNvQHb, what the page calls
+  /// when you open a chat). Returns the raw reply.
+  Future<String> _readChat(String cid) async {
+    final at = _at ?? '';
+    final path = '/app/${cid.startsWith('c_') ? cid.substring(2) : cid}';
+    final url = 'https://gemini.google.com/_/BardChatUi/data/batchexecute'
+        '?rpcids=hNvQHb&source-path=${Uri.encodeQueryComponent(path)}'
+        '&bl=${Uri.encodeQueryComponent(_bl)}&_reqid=$_reqid&rt=c';
+    _reqid += 100000;
+    final freq = jsonEncode([
+      [
+        [
+          'hNvQHb',
+          jsonEncode([cid, 10, null, 1, [1], [4], null, 1]),
+          null,
+          'generic'
+        ]
+      ]
+    ]);
+    if (_viaPage) {
+      final r = await _pageRequest('POST', url,
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+            'X-Same-Domain': '1',
+          },
+          body: 'f.req=${Uri.encodeQueryComponent(freq)}'
+              '&at=${Uri.encodeQueryComponent(at)}',
+          timeout: const Duration(seconds: 30));
+      return r.body;
+    }
+    final h = await http
+        .post(Uri.parse(url),
+            headers: _headers(form: true), body: {'f.req': freq, 'at': at})
+        .timeout(const Duration(seconds: 30));
+    return utf8.decode(h.bodyBytes, allowMalformed: true);
+  }
+
   static final RegExp _genUrl = RegExp(
       r'^https://[a-z0-9.-]*(googleusercontent\.com|usercontent\.google\.com)'
-      r'/(rd-)?gg-dl/',
+      r'/(rd-)?gg(-dl)?/',
       caseSensitive: false);
 
   /// Generated-image links inside a StreamGenerate reply (any depth).
@@ -984,7 +1110,15 @@ class GeminiWebClient {
     final out = <String>[];
     void walk(dynamic n) {
       if (n is String) {
-        if (_genUrl.hasMatch(n) && !out.contains(n)) out.add(n);
+        if (_genUrl.hasMatch(n) && !out.contains(n)) {
+          out.add(n);
+        } else if (n.length > 40 &&
+            n.startsWith('[') &&
+            n.contains('googleusercontent')) {
+          try {
+            walk(jsonDecode(n)); // JSON inside a string
+          } catch (_) {}
+        }
       } else if (n is List) {
         for (final e in n) {
           walk(e);
@@ -1060,8 +1194,8 @@ class GeminiWebClient {
           u = next;
           continue;
         }
-        throw GeminiWebException(
-            'Image download from Gemini failed (HTTP ${r.status}).');
+        throw GeminiWebException('Image download from Gemini failed at '
+            'step ${hop + 1} (HTTP ${r.status}, ${r.contentType}).');
       }
       final res = await http.get(Uri.parse(u), headers: {
         'Cookie': session.cookieHeader,
@@ -1078,8 +1212,8 @@ class GeminiWebClient {
         u = next;
         continue;
       }
-      throw GeminiWebException(
-          'Image download from Gemini failed (HTTP ${res.statusCode}).');
+      throw GeminiWebException('Image download from Gemini failed at step '
+          '${hop + 1} (HTTP ${res.statusCode}, $ct).');
     }
     throw GeminiWebException('Image download from Gemini: too many hops.');
   }

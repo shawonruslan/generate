@@ -3144,7 +3144,7 @@ class _BatchScreenState extends State<BatchScreen> {
     } else if (s.error != null) {
       final msg = s.error is CloudinaryApiException
           ? (s.error as CloudinaryApiException).message
-          : '$s.error';
+          : '${s.error}';
       body = Tooltip(
         message: msg,
         child: Container(

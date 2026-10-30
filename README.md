@@ -266,6 +266,21 @@ JPEG only, **2800x2400 (7:6 = 1.4:1.2)**, max 25 MP, max 8 MB, and an **extensio
 - Anti-repeat is now a switch and only runs for targets up to 75 %. It keeps the same target when it rewrites.
 - Every prompt remembers its target. The compare view shows **Target vs measured** (on target / more different / closer) with *Less similar* and *Closer to reference* rewrite buttons.
 
+## v1.14.3 - Picture taken straight from the Gemini chat page (Windows)
+
+- The Gemini page shows the finished picture as `generated-image img.image` with a `blob:` source (from the response HTML you shared). When the reply stream has no image link, the app opens that chat (`/app/<id>`) in a background tab of the signed-in browser. It waits up to 120 s for the loaded image, reads the blob bytes inside the page and closes the tab.
+- Elsewhere (Android, or if that fails) the app reads the chat back (`hNvQHb`) for up to 60 s.
+
+## v1.14.2 - Gemini image is picked up even when it arrives late
+
+- Gemini often finishes the picture after the reply stream has closed (the page shows it a few seconds later). If the stream has no image link, the app reads the chat back (batchexecute `hNvQHb`, the same call the Gemini page makes) every 4 s for up to 90 s and takes the image from there.
+- Image links are now also found in older `/gg/` form and inside JSON strings.
+- If no image is found, Gemini's raw reply is saved to `%TEMP%/ais_gemini_last_reply.txt` (system temp folder) and the path is shown in the error. Download errors now name the failing step.
+
+## v1.14.1 - Real error text on failed Batch images
+
+- A failed Batch image showed "Instance of '_ItemState'.error" instead of the reason (string interpolation bug). The tooltip now shows the real message, for example the Gemini or Cloudinary error.
+
 ## v1.14.0 - Gemini web image engine (no Cloudinary needed)
 
 - Settings -> **Image engine**: Cloudinary or **Gemini web**. With Gemini web, every image (Home text / image to image, Batch anchors and chained variants) is drawn by your signed-in Gemini web session. No Cloudinary keys or credits needed.

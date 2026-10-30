@@ -88,4 +88,24 @@ void main() {
     expect(ExportPresets.displayUrl(local, 0), local);
     expect(LocalImageServer.isLocal(local), isTrue);
   });
+
+  test('image link inside a nested JSON string, old gg/ links, chat id', () {
+    const u = 'https://lh3.googleusercontent.com/gg/AAbbCC123';
+    final inner = jsonEncode([
+      [null, [null, null, null, u]]
+    ]);
+    final raw = _stream([
+      null,
+      ['c_0123456789abcdef', 'r_1'],
+      inner
+    ]);
+    expect(GeminiWebClient.generatedImageUrls(raw), [u]);
+    expect(GeminiWebClient.conversationIdFrom(raw), 'c_0123456789abcdef');
+    // placeholder link in the text is not an image
+    expect(
+        GeminiWebClient.generatedImageUrls(_stream([
+          'http://googleusercontent.com/image_generation_content/0'
+        ])),
+        isEmpty);
+  });
 }

@@ -6,7 +6,7 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 
-import '../gemini_web.dart' show GeminiPageTransport, GeminiPageResponse;
+import '../gemini_web.dart' show GeminiPageTransport, GeminiPageResponse, GeminiChatImageReader;
 import 'cdp.dart';
 import 'prompt_browser.dart';
 import 'overlay_script.dart';
@@ -74,7 +74,8 @@ class FetchedImage {
 /// The browser runs with its own profile under the app-support folder, so
 /// signing in to gemini.google.com there once is enough for the live
 /// cookie path.
-class ChromiumBrowser implements PromptBrowser, GeminiPageTransport {
+class ChromiumBrowser
+    implements PromptBrowser, GeminiPageTransport, GeminiChatImageReader {
   ChromiumBrowser._(this._cdp, this.executable, this.profileDir) {
     _evSub = _cdp.events.listen(_onEvent);
     _cdp.done.then((_) => _handleClosed());
@@ -609,6 +610,62 @@ class ChromiumBrowser implements PromptBrowser, GeminiPageTransport {
 
   @override
   bool get isAvailable => isConnected;
+
+  /// Opens the Gemini chat [conversationId] in a background tab of the
+  /// signed-in profile, waits for the generated picture
+  /// (`generated-image img.image`, a blob: URL) and returns its bytes.
+  @override
+  Future<Uint8List?> chatImage(String conversationId,
+      {Duration timeout = const Duration(seconds: 120)}) async {
+    final id = conversationId.startsWith('c_')
+        ? conversationId.substring(2)
+        : conversationId;
+    final t = await _cdp.send('Target.createTarget', params: {
+      'url': 'https://gemini.google.com/app/$id',
+      'background': true
+    });
+    final target = t['targetId'] as String;
+    try {
+      final a = await _cdp.send('Target.attachToTarget',
+          params: {'targetId': target, 'flatten': true});
+      final sid = a['sessionId'] as String;
+      const js = '''(async () => {
+  const imgs = [...document.querySelectorAll(
+      'generated-image img.image, single-image img.image')]
+    .filter(i => i.complete && i.naturalWidth > 0 && i.src);
+  if (!imgs.length) return '';
+  const im = imgs[imgs.length - 1];
+  const r = await fetch(im.src);
+  const buf = new Uint8Array(await r.arrayBuffer());
+  let bin = '';
+  for (let i = 0; i < buf.length; i += 32768) {
+    bin += String.fromCharCode.apply(null, buf.subarray(i, i + 32768));
+  }
+  return btoa(bin);
+})()''';
+      final until = DateTime.now().add(timeout);
+      while (DateTime.now().isBefore(until)) {
+        await Future.delayed(const Duration(seconds: 2));
+        try {
+          final r = await _cdp.send('Runtime.evaluate',
+              params: {
+                'expression': js,
+                'awaitPromise': true,
+                'returnByValue': true,
+              },
+              sessionId: sid,
+              timeout: const Duration(seconds: 30));
+          final v = r['result']?['value'];
+          if (v is String && v.length > 1000) return base64Decode(v);
+        } catch (_) {}
+      }
+      return null;
+    } finally {
+      try {
+        await _cdp.send('Target.closeTarget', params: {'targetId': target});
+      } catch (_) {}
+    }
+  }
 
   /// Background gemini.google.com tab of the signed-in profile; requests
   /// run there with the page's own origin and cookies.
