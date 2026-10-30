@@ -179,6 +179,44 @@ double _order(SceneElement e) =>
       _ => 0.0,
     };
 
+/// Single-call brief: Gemini lists the elements, picks what to keep for
+/// [target] and writes the prompt in the SAME answer (one request
+/// instead of inventory + prompt).
+String oneShotElementBrief(int target, {String boost = ''}) {
+  final t = target.clamp(5, 95);
+  final intensity = t >= 75
+      ? 'subtle but clearly visible'
+      : t >= 50
+          ? 'clear'
+          : 'strong';
+  final b = StringBuffer()
+    ..write('\n\nSIMILARITY TARGET: $t% (this overrides every other '
+        'originality rule above).\n')
+    ..write('Work in two steps inside ONE answer.\n'
+        'STEP 1 - list every visual element of the attached picture '
+        '(main subjects, props, background layers, textures, text/graphics, '
+        'effects, plus the global rows composition, camera, lighting, '
+        'colour, time, style, mood), concrete and short, with position '
+        'when it matters. Give each impact 1-10 (share of what the eye '
+        'sees) and identity 1-10 (how much it makes the picture '
+        'recognisable). 10 to 24 lines, exactly this format:\n'
+        '[ELEMENTS]\nname | category | impact | identity\n[/ELEMENTS]\n'
+        'category is one of: subject, object, background, texture, text, '
+        'effect, composition, camera, lighting, colour, time, style, mood.\n')
+    ..write('STEP 2 - keep identical the elements that together carry about '
+        '$t% of the visual weight (impact and identity) and change the rest '
+        'with $intensity changes. Change the least defining elements first; '
+        'camera angle, time of day and mood change early, the art style and '
+        'the main subject change last. At least one element always changes '
+        '(never an exact copy). Describe kept elements exactly as seen, '
+        'with their real colours and lighting.\n')
+    ..write('Then write the final text-to-image prompt (no reference to '
+        '"the picture" or "[1]", fully self-contained) between [PROMPT] '
+        'and [/PROMPT].');
+  if (boost.isNotEmpty) b.write('\n$boost');
+  return b.toString();
+}
+
 /// Step 2 brief appended to the prompt instruction: the concrete keep /
 /// change lists for THIS picture.
 String elementBrief(List<SceneElement> els, int target, {String boost = ''}) {

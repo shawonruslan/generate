@@ -9,6 +9,7 @@ import 'package:image/image.dart' as img;
 import 'package:path_provider/path_provider.dart';
 
 import '../compare/originality.dart';
+import '../compare/colour_match.dart';
 import '../compare/element_plan.dart';
 export '../compare/element_plan.dart' show SceneElement;
 
@@ -84,6 +85,11 @@ class ImagePromptItem {
   /// for [prompt] (empty = generic plan).
   List<SceneElement> elements = [];
 
+  /// Measured colours / exposure of the source picture (read locally
+  /// when the prompt is written; used by Smart generation, no upload).
+  List<String> palette = [];
+  String tone = '';
+
   bool get isThumbnailable =>
       src.startsWith('http://') || src.startsWith('https://');
 
@@ -103,6 +109,8 @@ class ImagePromptItem {
         if (target > 0) 'tg': target,
         if (elements.isNotEmpty)
           'el': [for (final e in elements) e.toJson()],
+        if (palette.isNotEmpty) 'pl': palette,
+        if (tone.isNotEmpty) 'tn': tone,
       };
 
   static ImagePromptItem? fromJson(dynamic j) {
@@ -137,7 +145,12 @@ class ImagePromptItem {
         if (j['el'] is List)
           for (final e in j['el'] as List)
             if (SceneElement.fromJson(e) case final el?) el
-      ];
+      ]
+      ..palette = [
+        if (j['pl'] is List)
+          for (final c in j['pl'] as List) c.toString()
+      ]
+      ..tone = (j['tn'] ?? '').toString();
   }
 
   static Uint8List? _b64(dynamic v) {
@@ -400,7 +413,7 @@ class ImagePromptService extends ChangeNotifier {
   bool matchTarget = true;
 
   /// Extra images allowed per set anchor while matching (0-3).
-  int matchTries = 2;
+  int matchTries = 0; // 0 = one image, never regenerate
   String browserPath = '';
   String homeUrl = 'https://www.pinterest.com/';
   GeminiCookieSource cookieSource = GeminiCookieSource.auto;
@@ -471,7 +484,7 @@ class ImagePromptService extends ChangeNotifier {
           .clamp(minSimilarityTarget, maxSimilarityTarget);
       antiRepeat = p.getBool(_kAntiRepeat) ?? true;
       matchTarget = p.getBool('img_prompt_match_target') ?? true;
-      matchTries = (p.getInt('img_prompt_match_tries') ?? 2).clamp(0, 3);
+      matchTries = (p.getInt('img_prompt_match_tries_v2') ?? 0).clamp(0, 3);
       browserPath = p.getString(_kExe) ?? '';
       homeUrl = p.getString(_kHome) ?? homeUrl;
       cookieSource = GeminiCookieSource.values.firstWhere(
@@ -537,7 +550,7 @@ class ImagePromptService extends ChangeNotifier {
       await p.setInt(_kTarget, this.similarityTarget);
       await p.setBool(_kAntiRepeat, this.antiRepeat);
       await p.setBool('img_prompt_match_target', this.matchTarget);
-      await p.setInt('img_prompt_match_tries', this.matchTries);
+      await p.setInt('img_prompt_match_tries_v2', this.matchTries);
       await p.setString(_kExe, this.browserPath);
       await p.setString(_kHome, this.homeUrl);
       await p.setString(_kSource, this.cookieSource.name);
@@ -1108,37 +1121,22 @@ class ImagePromptService extends ChangeNotifier {
       // 1) Element inventory of THIS picture (reused on rewrites), then
       //    the keep/change plan for the target.
       var els = it.elements;
-      if (els.length < 5 && debugAnswer == null) {
-        status = 'Listing the elements of the picture...';
-        notifyListeners();
-        try {
-          final reply = await (await _gemini())
-              .askWithImage(
-            elementInventoryInstruction,
-            pic.bytes,
-            filename: pic.mimeType == 'image/png' ? 'image.png' : 'image.jpg',
-            mimeType: pic.mimeType,
-            completeWhen:
-                RegExp(r'\\?\[/ELEMENTS\\?\]', caseSensitive: false),
-            attempts: 1,
-            timeout: const Duration(seconds: 90),
-          )
-              .timeout(const Duration(seconds: 150));
-          els = parseElements(reply);
-        } on GeminiWebException catch (e) {
-          if (e.expired) rethrow;
-          els = [];
-        } catch (_) {
-          els = [];
-        }
-      }
+      // Colour / exposure reading runs locally next to the Gemini call.
+      final lookF = referenceLookInBackground(pic.bytes)
+          .then<ReferenceLook?>((l) => l)
+          .catchError((_) => null);
+      // ONE Gemini call: element inventory + plan + prompt together
+      // (was two calls). Rewrites reuse the saved inventory.
+      final oneShot = els.length < 5 && debugAnswer == null;
       if (els.length >= 5) planElements(els, target);
       status = 'Writing the prompt...';
       notifyListeners();
       Future<String> ask(String boost) {
         final brief = els.length >= 5
             ? elementBrief(els, target, boost: boost)
-            : similarityBrief(target, seed, boost: boost);
+            : oneShot
+                ? oneShotElementBrief(target, boost: boost)
+                : similarityBrief(target, seed, boost: boost);
         final full = '$instruction$brief';
         final hook = debugAnswer;
         if (hook != null) return hook(pic.bytes);
@@ -1156,11 +1154,16 @@ class ImagePromptService extends ChangeNotifier {
 
       final previous = it.prompt;
       final remix = rewrite && previous.isNotEmpty;
-      var prompt = extractPrompt(await ask(remix
+      final firstReply = await ask(remix
           ? 'This is a rewrite: the previous prompt for this picture was '
               'written for ${it.target > 0 ? '${it.target}%' : 'another'} '
               'similarity; follow the new $target% target strictly.'
-          : ''));
+          : '');
+      if (oneShot) {
+        els = parseElements(firstReply);
+        if (els.length >= 5) planElements(els, target);
+      }
+      var prompt = extractPrompt(firstReply);
       if (prompt.isEmpty) throw GeminiWebException('Gemini returned no prompt.');
       // Anti-repeat: look-alike pictures must not give look-alike prompts.
       // Skipped for close targets (there the prompt SHOULD follow the
@@ -1191,6 +1194,11 @@ class ImagePromptService extends ChangeNotifier {
       }
       it.target = target;
       it.elements = els.length >= 5 ? els : [];
+      final look = await lookF;
+      if (look != null) {
+        it.palette = look.paletteHex;
+        it.tone = look.tone;
+      }
       if (remix && previous.isNotEmpty) it.addedToList = false;
       it.prompt = prompt;
       it.state = ImagePromptState.done;
@@ -1309,9 +1317,7 @@ class ImagePromptService extends ChangeNotifier {
 
   /// Professional visual review by Gemini: both pictures side by side
   /// (A = reference, B = new) with a strict scoring format.
-  Future<AiCompareReview> aiReview(Uint8List reference, Uint8List generated,
-      {int attempts = 3,
-      Duration timeout = const Duration(seconds: 150)}) async {
+  Future<AiCompareReview> aiReview(Uint8List reference, Uint8List generated) async {
     final sheet = await Isolate.run(() => _compareSheet(reference, generated));
     if (sheet == null) throw GeminiWebException('Could not read the pictures.');
     final reply = await (await _gemini()).askWithImage(
@@ -1320,8 +1326,6 @@ class ImagePromptService extends ChangeNotifier {
       filename: 'compare.jpg',
       mimeType: 'image/jpeg',
       completeWhen: RegExp(r'\\?\[/REVIEW\\?\]', caseSensitive: false),
-      attempts: attempts,
-      timeout: timeout,
     );
     return AiCompareReview.parse(reply);
   }

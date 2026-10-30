@@ -187,36 +187,13 @@ class _HomeScreenState extends State<HomeScreen> {
       GenerationResult r;
       final svc = ImagePromptService.instance;
       await svc.load();
-      final matchRef =
+      // Smart generation: one text_to_image with the smart prompt
+      // (no reference upload, no measuring, no retries).
+      final smartRef =
           _tab == 0 && svc.matchTarget ? svc.referenceFor(prompt) : null;
-      TargetOutcome? matched;
-      if (matchRef != null) {
-        matched = await generateToTarget(
-          api: api,
-          prompt: prompt,
-          ref: matchRef,
-          textModel: _model,
-          aspectRatio: _ratio,
-          resolution: _resolution,
-          format: _format,
-          seed: (a) => seed + a * 1000,
-          onProgress: (s, t) {
-            if (mounted) {
-              setState(() => _status =
-                  '${_statusLabel(s)}  ${GenerationTiming.fmt(t)}');
-            }
-          },
-          onStatus: (line) {
-            if (mounted) setState(() => _status = line);
-          },
-        );
-      }
-      if (matched != null) {
-        r = matched.result;
-        await AppPrefs.setLastModel(false, _model);
-      } else if (_tab == 0) {
+      if (_tab == 0) {
         r = await api.textToImage(
-          prompt: prompt,
+          prompt: smartPrompt(prompt, smartRef),
           modelId: _model,
           aspectRatio: _ratio,
           resolution: _resolution,

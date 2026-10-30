@@ -808,7 +808,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       width: 40, height: 40),
                 ),
                 title: const Text('AI Image Studio'),
-                subtitle: const Text('Version 1.12.2 - Cloudinary image generation'),
+                subtitle: const Text('Version 1.12.1 - Cloudinary image generation'),
               ),
             ),
           ],

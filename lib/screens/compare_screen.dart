@@ -273,9 +273,8 @@ class _CompareScreenState extends State<CompareScreen> {
             const SizedBox(height: 3),
             Text(
                 sim < t - 12
-                    ? 'Turn on "Match similarity target" in Batch Sets: the source '
-                        'picture is sent with the prompt to image_to_image and results '
-                        'are regenerated until they are near $t%.'
+                    ? 'Far below $t%: rewrite the prompt with a higher % in Image to '
+                        'Prompt (Smart generation adds the source palette and exposure).'
                     : 'Pixel estimate - same subject from a new angle reads low. '
                         'Run the AI review for an accurate target check.',
                 style: TextStyle(fontSize: 11.5, color: cs.onSurfaceVariant)),

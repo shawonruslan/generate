@@ -266,12 +266,6 @@ JPEG only, **2800x2400 (7:6 = 1.4:1.2)**, max 25 MP, max 8 MB, and an **extensio
 - Anti-repeat is now a switch and only runs for targets up to 75 %. It keeps the same target when it rewrites.
 - Every prompt remembers its target. The compare view shows **Target vs measured** (on target / more different / closer) with *Less similar* and *Closer to reference* rewrite buttons.
 
-## v1.12.2 - Image generation never hangs on Gemini
-
-- The AI judge (similarity check) now makes one quick try with a hard cap (60s / 100s max). If Gemini is slow or not signed in, the app switches to pixel analysis and the generation continues.
-- Element inventory call: single try, capped at 150s.
-- If a Gemini request inside the browser tab times out or fails, the client falls back to the direct cookie path for the rest of the session.
-
 ## v1.12.1 - No more "logged out after 5 minutes"
 
 - Cause: the app renewed (RotateCookies) the same Google session that was

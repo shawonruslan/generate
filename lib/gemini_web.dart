@@ -381,11 +381,7 @@ class GeminiWebClient {
   /// When set and available, every request runs inside the browser.
   final GeminiPageTransport? transport;
 
-  bool get _viaPage => !_pageBroken && (transport?.isAvailable ?? false);
-
-  /// Set when a request inside the browser failed (tab blocked, page
-  /// script error, timeout): this client then uses the direct path.
-  bool _pageBroken = false;
+  bool get _viaPage => transport?.isAvailable ?? false;
 
   /// App-side cookie renewal (RotateCookies). OFF by default: renewing a
   /// session that is also open in a browser (the app's sign-in browser or
@@ -639,13 +635,11 @@ class GeminiWebClient {
               timeout: timeout)
           .timeout(timeout + const Duration(seconds: 10));
     } on TimeoutException {
-      _pageBroken = true;
       throw GeminiWebException(
           'Gemini (in the browser) did not respond within ${timeout.inSeconds}s.');
     } on GeminiWebException {
       rethrow;
     } catch (e) {
-      _pageBroken = true;
       throw GeminiWebException('Gemini request in the browser failed: $e');
     }
   }

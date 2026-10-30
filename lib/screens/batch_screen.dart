@@ -29,7 +29,6 @@ import '../widgets/device_mockup.dart';
 import 'browser_screen.dart';
 import 'compare_screen.dart';
 import '../compare/similarity.dart';
-import '../compare/target_match.dart';
 import '../compare/target_generator.dart';
 import 'settings_screen.dart';
 import '../widgets/ui_kit.dart';
@@ -1022,27 +1021,11 @@ class _BatchScreenState extends State<BatchScreen> {
       }
       await throttleSubmit();
       final svc = ImagePromptService.instance;
-      final matchRef =
+      final smartRef =
           job.isAnchor && svc.matchTarget ? svc.referenceFor(job.prompt) : null;
-      if (matchRef != null) {
-        final m = await _matchAnchor(
-          api: api,
-          job: job,
-          ref: matchRef,
-          seed: (int attempt) => seedBase == null
-              ? freshSeed()
-              : seedBase + job.index + attempt * 1000,
-          throttle: throttleSubmit,
-          progress: (st, t) => progress(job, st, t),
-        );
-        if (m != null) {
-          refUrls[job.index] = m.imageUrl;
-          return (result: m, localBytes: null);
-        }
-      }
       if (job.isAnchor) {
         final r = await api.textToImage(
-          prompt: _jobPrompt(job),
+          prompt: smartPrompt(_jobPrompt(job), smartRef),
           modelId: _model,
           aspectRatio: _ratio,
           resolution: _resolution,
@@ -2484,63 +2467,26 @@ class _BatchScreenState extends State<BatchScreen> {
     );
   }
 
-  /// "Match similarity target" switch + extra-tries stepper.
+  /// Smart generation switch (prompts from Image to Prompt).
   Widget _matchTargetTile() {
     final svc = ImagePromptService.instance;
-    final scheme = Theme.of(context).colorScheme;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          secondary: const Icon(Icons.track_changes_outlined),
-          title: const Text('Match similarity target'),
-          subtitle: const Text(
-              'Prompts from Image to Prompt: the source picture the prompt was '
-              'made from is sent to Cloudinary image_to_image as [1] together with '
-              'the generated prompt and your similarity %. Each result is measured '
-              'and regenerated with a corrected % until it is within '
-              '\u00b1$matchTolerance% (the closest one is kept).'),
-          value: svc.matchTarget,
-          onChanged: _running
-              ? null
-              : (v) async {
-                  await svc.saveSettings(matchTarget: v);
-                  setState(() {});
-                },
-        ),
-        if (svc.matchTarget)
-          Padding(
-            padding: const EdgeInsets.only(left: 40, bottom: 4),
-            child: Row(children: [
-              Expanded(
-                child: Text('Extra tries per set anchor: ${svc.matchTries}',
-                    style: TextStyle(
-                        fontSize: 13, color: scheme.onSurfaceVariant)),
-              ),
-              IconButton(
-                tooltip: 'Fewer tries',
-                icon: const Icon(Icons.remove_circle_outline),
-                onPressed: _running || svc.matchTries <= 0
-                    ? null
-                    : () async {
-                        await svc.saveSettings(matchTries: svc.matchTries - 1);
-                        setState(() {});
-                      },
-              ),
-              IconButton(
-                tooltip: 'More tries (more credits)',
-                icon: const Icon(Icons.add_circle_outline),
-                onPressed: _running || svc.matchTries >= 3
-                    ? null
-                    : () async {
-                        await svc.saveSettings(matchTries: svc.matchTries + 1);
-                        setState(() {});
-                      },
-              ),
-            ]),
-          ),
-      ],
+    return SwitchListTile(
+      contentPadding: EdgeInsets.zero,
+      secondary: const Icon(Icons.auto_awesome_outlined),
+      title: const Text('Smart generation'),
+      subtitle: const Text(
+          'Prompts from Image to Prompt already carry the element plan for '
+          'your similarity %. Each anchor is ONE fast text_to_image '
+          'request, plus the exact palette and exposure of the source '
+          'picture when the % keeps them. No upload, no image_to_image, '
+          'no re-generation.'),
+      value: svc.matchTarget,
+      onChanged: _running
+          ? null
+          : (v) async {
+              await svc.saveSettings(matchTarget: v);
+              setState(() {});
+            },
     );
   }
 
@@ -3331,39 +3277,6 @@ class _BatchScreenState extends State<BatchScreen> {
         ),
       ],
     );
-  }
-
-  /// Set anchor generated to the similarity target of its Image to
-  /// Prompt reference (see [generateToTarget]).
-  Future<GenerationResult?> _matchAnchor({
-    required CloudinaryApi api,
-    required BatchJob job,
-    required ImagePromptItem ref,
-    required int Function(int attempt) seed,
-    required Future<void> Function() throttle,
-    required void Function(String st, Duration t) progress,
-  }) async {
-    final o = await generateToTarget(
-      api: api,
-      prompt: _jobPrompt(job),
-      ref: ref,
-      textModel: _model,
-      aspectRatio: _ratio,
-      resolution: _resolution,
-      format: _format,
-      seed: seed,
-      beforeRetry: throttle,
-      onProgress: progress,
-      measureUrl: _displayUrl,
-      onStatus: (line) {
-        if (mounted) {
-          setState(() => _current = '${_short(job.prompt)} - $line');
-        }
-      },
-    );
-    if (o == null) return null;
-    _simCache[o.result.imageUrl] = Future.value(o.similarity);
-    return o.result;
   }
 
   /// Creativity score per generated image URL (null = no reference or
