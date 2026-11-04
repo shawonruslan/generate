@@ -61,6 +61,7 @@ class SessionProvider extends ChangeNotifier {
     String? username,
     required String password,
     String? workerUrl,
+    bool persist = true,
   }) async {
     if (workerUrl != null && workerUrl.trim().isNotEmpty) {
       api.baseUrl = workerUrl.trim();
@@ -68,7 +69,11 @@ class SessionProvider extends ChangeNotifier {
     final u = await api.login(role: role, username: username, password: password);
     _user = u;
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('session_token', u.token);
+    if (persist) {
+      await prefs.setString('session_token', u.token);
+    } else {
+      await prefs.remove('session_token');
+    }
     await prefs.setString('worker_url', api.baseUrl);
     await prefs.setString('username', u.username);
     await prefs.setString('role', u.role);

@@ -24,18 +24,21 @@ class AppColors {
   static const Color nightLine = Color(0xFF2D2D2D);
   static const Color nightLine2 = Color(0xFF262626);
   static const Color nightHover = Color(0xFF2B2B2B);
-  static const Color nightText = Color(0xFFEDEDED);
+  static const Color nightText = Color(0xFFE9E9E9);
   static const Color nightMuted = Color(0xFF909090);
   static const Color nightSideText = Color(0xFFA6A6A6);
+  static const Color nightBrandTint = Color(0xFF2B3242); // active nav pill (night)
 
-  // Day (off-white glassy)
+  // Day — exact web tokens: page bg warm cream-gray, chrome solid white.
   static const Color dayBg = Color(0xFFECEAE2);
-  static const Color dayPanel = Color(0xFFF7F6F2); // solid stand-in for the frosted glass
-  static const Color daySide = Color(0xFFF7F6F2);
+  static const Color dayPanel = Color(0xFFFFFFFF);
+  static const Color daySide = Color(0xFFFFFFFF);
   static const Color daySide2 = Color(0xFFFFFFFF);
+  static const Color daySoft = Color(0xFFF4F2ED); // icon chips / search resting bg
+  static const Color dayBrandTint = Color(0xFFE8F0FF); // active nav pill (day)
   static const Color dayLine = Color(0xFFE3E0D6);
-  static const Color dayText = Color(0xFF1C1E22);
-  static const Color dayMuted = Color(0xFF868A93);
+  static const Color dayText = Color(0xFF222222);
+  static const Color dayMuted = Color(0xFF888888);
   static const Color daySideText = Color(0xFF5D6169);
 }
 
@@ -51,6 +54,7 @@ class AppTheme {
     return ThemeData(
       useMaterial3: true,
       brightness: Brightness.dark,
+      fontFamily: 'Poppins',
       colorScheme: scheme,
       scaffoldBackgroundColor: AppColors.nightBg,
       appBarTheme: const AppBarTheme(
@@ -106,8 +110,8 @@ class AppTheme {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       ),
       snackBarTheme: const SnackBarThemeData(
-        backgroundColor: AppColors.nightSide2,
-        contentTextStyle: TextStyle(color: AppColors.nightText),
+        backgroundColor: Colors.black,
+        contentTextStyle: TextStyle(color: Colors.white, fontSize: 13),
         behavior: SnackBarBehavior.floating,
       ),
       chipTheme: const ChipThemeData(
@@ -128,6 +132,7 @@ class AppTheme {
     return ThemeData(
       useMaterial3: true,
       brightness: Brightness.light,
+      fontFamily: 'Poppins',
       colorScheme: scheme,
       scaffoldBackgroundColor: AppColors.dayBg,
       appBarTheme: const AppBarTheme(
@@ -183,8 +188,8 @@ class AppTheme {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       ),
       snackBarTheme: const SnackBarThemeData(
-        backgroundColor: AppColors.dayText,
-        contentTextStyle: TextStyle(color: Colors.white),
+        backgroundColor: Colors.black,
+        contentTextStyle: TextStyle(color: Colors.white, fontSize: 13),
         behavior: SnackBarBehavior.floating,
       ),
       chipTheme: const ChipThemeData(

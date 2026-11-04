@@ -5,13 +5,29 @@ import '../models/models.dart';
 import '../theme/app_theme.dart';
 import '../utils/format.dart';
 
-/// Small helper: show a snackbar.
+/// Small helper: show a toast — web-style black pill, icon, white 13px text.
 void showMsg(BuildContext context, String msg, {bool error = false}) {
-  final theme = Theme.of(context);
   ScaffoldMessenger.of(context).showSnackBar(
     SnackBar(
-      content: Text(msg),
-      backgroundColor: error ? theme.colorScheme.error : null,
+      content: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            error ? Icons.error_outline : Icons.check_circle,
+            color: error ? const Color(0xFFE5484D) : const Color(0xFF46A758),
+            size: 18,
+          ),
+          const SizedBox(width: 10),
+          Flexible(
+            child: Text(msg,
+                style: const TextStyle(color: Colors.white, fontSize: 13)),
+          ),
+        ],
+      ),
+      backgroundColor: Colors.black,
+      behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      margin: const EdgeInsets.only(left: 24, right: 24, bottom: 26),
     ),
   );
 }

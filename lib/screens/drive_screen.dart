@@ -302,6 +302,61 @@ class _DriveScreenState extends State<DriveScreen> {
     );
   }
 
+  /// Empty-drive card (mirrors the web): white rounded-16 card with the
+  /// empty message plus side-by-side "New folder" (outlined) and
+  /// "Upload" (solid blue) buttons.
+  Widget _emptyStateCard() {
+    final theme = Theme.of(context);
+    final brand = theme.colorScheme.primary;
+    return Container(
+      margin: const EdgeInsets.all(16),
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 36),
+      decoration: BoxDecoration(
+        color: theme.cardColor,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: theme.dividerColor),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.folder_outlined,
+              size: 48, color: theme.hintColor),
+          const SizedBox(height: 12),
+          const Text('No files in this drive yet',
+              textAlign: TextAlign.center,
+              style:
+                  TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 6),
+          Text('Create a folder or upload files to get started',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 13, color: theme.hintColor)),
+          const SizedBox(height: 18),
+          Wrap(
+            alignment: WrapAlignment.center,
+            spacing: 12,
+            runSpacing: 8,
+            children: [
+              OutlinedButton.icon(
+                onPressed: _newFolder,
+                icon: const Icon(Icons.create_new_folder_outlined),
+                label: const Text('New folder'),
+              ),
+              ElevatedButton.icon(
+                onPressed: _uploadFiles,
+                icon: const Icon(Icons.upload_outlined),
+                label: const Text('Upload'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: brand,
+                  foregroundColor: Colors.white,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildBody(
       BuildContext context, SessionProvider session, DriveData? drive) {
     if (drive == null) {
@@ -323,8 +378,8 @@ class _DriveScreenState extends State<DriveScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _toolbar(),
-        _breadcrumbs(drive),
+        _toolbar(drive),
+        if (_query.trim().isNotEmpty) _queryChip(),
         if (_inSelection) _selectionBar(),
         Expanded(
           child: RefreshIndicator(
@@ -335,15 +390,16 @@ class _DriveScreenState extends State<DriveScreen> {
                 ? ListView(
                     physics: const AlwaysScrollableScrollPhysics(),
                     children: [
-                      SizedBox(
-                        height: 320,
-                        child: EmptyView(
-                          icon: Icons.folder_outlined,
-                          message: _query.trim().isEmpty
-                              ? 'This folder is empty'
-                              : 'No matches for "${_query.trim()}"',
-                        ),
-                      ),
+                      _query.trim().isEmpty
+                          ? _emptyStateCard()
+                          : SizedBox(
+                              height: 320,
+                              child: EmptyView(
+                                icon: Icons.folder_outlined,
+                                message:
+                                    'No matches for "${_query.trim()}"',
+                              ),
+                            ),
                     ],
                   )
                 : _view == _ViewMode.list
@@ -355,46 +411,48 @@ class _DriveScreenState extends State<DriveScreen> {
     );
   }
 
-  Widget _toolbar() {
+  /// Header: "My Drive" 22px/800 + small folder icon + "Home /" breadcrumb
+  /// prefix, with the sort dropdown and list/grid toggle at the right.
+  /// The breadcrumb chips row below handles subfolder navigation.
+  Widget _headerTitleRow(DriveData drive) {
+    final theme = Theme.of(context);
+    final brand = theme.colorScheme.primary;
+    final path = _pathFor(drive, _folderId);
+    final name =
+        path.isNotEmpty ? path.last.name : 'My Drive';
+    final prefix = _folderId == 'root' || path.isEmpty
+        ? 'Home / '
+        : 'Home / ${path.take(path.length - 1).map((f) => f.name).join(' / ')}'
+            '${path.length > 1 ? ' / ' : ''}';
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      padding: const EdgeInsets.fromLTRB(16, 12, 12, 4),
       child: Row(
         children: [
+          Icon(Icons.folder, size: 22, color: brand),
+          const SizedBox(width: 8),
           Expanded(
-            child: TextField(
-              controller: _searchCtrl,
-              decoration: InputDecoration(
-                hintText: 'Search in this folder…',
-                prefixIcon: const Icon(Icons.search, size: 20),
-                suffixIcon: _query.isEmpty
-                    ? null
-                    : IconButton(
-                        icon: const Icon(Icons.clear, size: 20),
-                        onPressed: () => _searchCtrl.clear(),
-                      ),
-                contentPadding:
-                    const EdgeInsets.symmetric(vertical: 0, horizontal: 12),
+            child: Text.rich(
+              TextSpan(
+                children: [
+                  TextSpan(
+                    text: prefix,
+                    style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                        color: theme.hintColor),
+                  ),
+                  TextSpan(
+                    text: name,
+                    style: const TextStyle(
+                        fontSize: 22, fontWeight: FontWeight.w800),
+                  ),
+                ],
               ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
           ),
-          const SizedBox(width: 4),
-          PopupMenuButton<_SortMode>(
-            tooltip: 'Sort',
-            icon: const Icon(Icons.sort),
-            initialValue: _sort,
-            onSelected: (v) {
-              setState(() => _sort = v);
-              _savePrefs();
-            },
-            itemBuilder: (c) => const [
-              PopupMenuItem(value: _SortMode.name, child: Text('Name')),
-              PopupMenuItem(value: _SortMode.size, child: Text('Size')),
-              PopupMenuItem(
-                  value: _SortMode.newest, child: Text('Newest first')),
-              PopupMenuItem(
-                  value: _SortMode.oldest, child: Text('Oldest first')),
-            ],
-          ),
+          _sortDropdown(),
           IconButton(
             tooltip: _view == _ViewMode.list ? 'Grid view' : 'List view',
             icon: Icon(_view == _ViewMode.list
@@ -412,58 +470,242 @@ class _DriveScreenState extends State<DriveScreen> {
     );
   }
 
-  Widget _breadcrumbs(DriveData drive) {
+  /// Single toolbar column (mirrors the web): title row on top, breadcrumb
+  /// chips below it for subfolders. The global topbar owns search, so there
+  /// is no second search field here.
+  Widget _toolbar(DriveData drive) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _headerTitleRow(drive),
+        if (_folderId != 'root')
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+            child: _crumbRow(drive),
+          ),
+      ],
+    );
+  }
+
+  /// Horizontally scrollable breadcrumb chips: "My Drive" + path segments.
+  Widget _crumbRow(DriveData drive) {
     final path = _pathFor(drive, _folderId);
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+    final theme = Theme.of(context);
+    final brand = theme.colorScheme.primary;
+    Widget chip(
+        String label, IconData icon, bool active, VoidCallback? onTap) {
+      return InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+          decoration: BoxDecoration(
+            color: active ? brand.withOpacity(0.14) : theme.cardColor,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+                color: active
+                    ? brand.withOpacity(0.45)
+                    : theme.dividerColor),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon,
+                  size: 15,
+                  color: active ? brand : theme.iconTheme.color),
+              const SizedBox(width: 6),
+              Text(label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                      fontSize: 13,
+                      fontWeight:
+                          active ? FontWeight.w800 : FontWeight.w600,
+                      color: active ? brand : null)),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
       child: Row(
         children: [
-          if (_folderId != 'root')
-            IconButton(
-              tooltip: 'Back',
-              icon: const Icon(Icons.arrow_back),
-              onPressed: _goParent,
+          chip('My Drive', Icons.hard_drive_outlined, _folderId == 'root',
+              _folderId == 'root' ? null : () => _navigate('root')),
+          for (final f in path) ...[
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 2),
+              child: Icon(Icons.chevron_right, size: 15, color: Colors.grey),
             ),
+            chip(f.name, Icons.folder_outlined, f.id == _folderId,
+                f.id == _folderId ? null : () => _navigate(f.id)),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// "Newest first" style sort dropdown (mirrors the web app).
+  Widget _sortDropdown() {
+    const labels = <_SortMode, String>{
+      _SortMode.newest: 'Newest first',
+      _SortMode.oldest: 'Oldest first',
+      _SortMode.name: 'Name A–Z',
+      _SortMode.size: 'Largest first',
+    };
+    const order = [
+      _SortMode.newest,
+      _SortMode.oldest,
+      _SortMode.name,
+      _SortMode.size
+    ];
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      decoration: BoxDecoration(
+        border: Border.all(color: theme.dividerColor),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<_SortMode>(
+          value: _sort,
+          isDense: true,
+          icon: const Icon(Icons.arrow_drop_down, size: 20),
+          style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: theme.textTheme.bodyMedium?.color),
+          items: [
+            for (final m in order)
+              DropdownMenuItem(value: m, child: Text(labels[m]!)),
+          ],
+          onChanged: (v) {
+            if (v == null) return;
+            setState(() => _sort = v);
+            _savePrefs();
+          },
+        ),
+      ),
+    );
+  }
+
+  /// Shown when the global search hands this screen an in-folder query,
+  /// so the active filter stays visible and clearable without a second
+  /// search bar.
+  Widget _queryChip() {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 2, 12, 0),
+      child: Row(
+        children: [
           Expanded(
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                children: [
-                  _crumb('My Drive', _folderId == 'root',
-                      () => _navigate('root')),
-                  for (final f in path) ...[
-                    const Icon(Icons.chevron_right,
-                        size: 16, color: Colors.grey),
-                    _crumb(f.name, f.id == _folderId,
-                        () => _navigate(f.id)),
-                  ],
-                ],
-              ),
-            ),
+            child: Text('Results for "${_query.trim()}"',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style:
+                    TextStyle(fontSize: 12, color: theme.hintColor)),
+          ),
+          TextButton(
+            onPressed: () => _searchCtrl.clear(),
+            child: const Text('Clear'),
           ),
         ],
       ),
     );
   }
 
-  Widget _crumb(String label, bool active, VoidCallback onTap) {
+  /// Section divider header ("FOLDERS" / "FILES"), like the web app.
+  Widget _sectionHeader(String title) {
     final theme = Theme.of(context);
-    return InkWell(
-      borderRadius: BorderRadius.circular(8),
-      onTap: active ? null : onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-        child: Text(
-          label,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 16, 4, 8),
+      child: Text(title.toUpperCase(),
           style: TextStyle(
-            fontWeight: active ? FontWeight.w800 : FontWeight.w500,
-            color: active ? theme.colorScheme.primary : null,
-            fontSize: 14,
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 1.2,
+              color: theme.hintColor)),
+    );
+  }
+
+  /// Purple owner badge (lock icon + owner name) for member home folders.
+  Widget _ownerBadge(String owner) {
+    final night = Theme.of(context).brightness == Brightness.dark;
+    const purple = Color(0xFF7E22CE);
+    final fg = night ? const Color(0xFFC084FC) : purple;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: purple.withOpacity(0.16),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.lock, size: 11, color: fg),
+          const SizedBox(width: 4),
+          Text(owner,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                  fontSize: 11, fontWeight: FontWeight.w700, color: fg)),
+        ],
+      ),
+    );
+  }
+
+  /// Blue "v2" version badge with a small circular-arrow icon, shown when a
+  /// file has versions (mirrors the web's .vbadge).
+  Widget _verBadge(int ver) {
+    final theme = Theme.of(context);
+    final brand = theme.colorScheme.primary;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: brand.withOpacity(0.14),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.autorenew, size: 11, color: brand),
+          const SizedBox(width: 3),
+          Text('v$ver',
+              style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  color: brand)),
+        ],
+      ),
+    );
+  }
+
+  /// Member avatar photo with a small folder badge overlaid (web parity).
+  Widget _ownerAvatar(String owner, String? url) {
+    final theme = Theme.of(context);
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        AvatarWidget(url: url, name: owner, radius: 26),
+        Positioned(
+          right: -2,
+          bottom: -2,
+          child: Container(
+            width: 22,
+            height: 22,
+            decoration: BoxDecoration(
+              color: theme.colorScheme.primary,
+              shape: BoxShape.circle,
+              border: Border.all(color: theme.cardColor, width: 2),
+            ),
+            child:
+                const Icon(Icons.folder, size: 12, color: Colors.white),
           ),
         ),
-      ),
+      ],
     );
   }
 
@@ -525,131 +767,310 @@ class _DriveScreenState extends State<DriveScreen> {
 
   // ---------------- list / grid ----------------
 
+  /// White rounded-16 card containing a table of rows, with a "NAME" header
+  /// row in small gray caps and hairline dividers (mirrors the web list).
+  Widget _listCard(List<Widget> rows) {
+    final theme = Theme.of(context);
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 2, 12, 12),
+      decoration: BoxDecoration(
+        color: theme.cardColor,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: theme.dividerColor),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+            decoration: BoxDecoration(
+              color: theme.dividerColor.withOpacity(0.25),
+              border: Border(
+                  bottom: BorderSide(color: theme.dividerColor)),
+            ),
+            child: Text('NAME',
+                style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.5,
+                    color: theme.hintColor)),
+          ),
+          for (int i = 0; i < rows.length; i++) ...[
+            if (i > 0)
+              Divider(
+                  height: 1,
+                  thickness: 1,
+                  color: theme.dividerColor.withOpacity(0.6)),
+            rows[i],
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// Solid blue square download button (white down-arrow) for list rows.
+  Widget _dlButton(DriveFile f) {
+    final brand = Theme.of(context).colorScheme.primary;
+    return InkWell(
+      borderRadius: BorderRadius.circular(8),
+      onTap: () => _downloadFile(f),
+      child: Container(
+        width: 36,
+        height: 36,
+        decoration: BoxDecoration(
+          color: brand,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child:
+            const Icon(Icons.download, color: Colors.white, size: 18),
+      ),
+    );
+  }
+
   Widget _listView(
       DriveData drive, List<DriveFolder> folders, List<DriveFile> files) {
-    return ListView.builder(
+    return ListView(
       controller: _scrollCtrl,
-      itemCount: folders.length + files.length,
-      itemBuilder: (_, i) => i < folders.length
-          ? _folderTile(drive, folders[i])
-          : _fileTile(drive, files[i - folders.length]),
+      children: [
+        if (folders.isNotEmpty) ...[
+          _sectionHeader('Folders'),
+          _listCard([for (final fo in folders) _folderRow(drive, fo)]),
+        ],
+        if (files.isNotEmpty) ...[
+          _sectionHeader('Files'),
+          _listCard([for (final f in files) _fileRow(drive, f)]),
+        ],
+      ],
     );
   }
 
   Widget _gridView(
       DriveData drive, List<DriveFolder> folders, List<DriveFile> files) {
-    final items = <Object>[...folders, ...files];
-    return GridView.builder(
+    const delegate = SliverGridDelegateWithMaxCrossAxisExtent(
+      maxCrossAxisExtent: 170,
+      mainAxisSpacing: 10,
+      crossAxisSpacing: 10,
+      childAspectRatio: 0.92,
+    );
+    Widget headerSliver(String title, double topPad) => SliverToBoxAdapter(
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(16, topPad, 16, 0),
+            child: _sectionHeader(title),
+          ),
+        );
+    return CustomScrollView(
       controller: _scrollCtrl,
-      padding: const EdgeInsets.all(12),
-      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-        maxCrossAxisExtent: 170,
-        mainAxisSpacing: 10,
-        crossAxisSpacing: 10,
-        childAspectRatio: 0.92,
-      ),
-      itemCount: items.length,
-      itemBuilder: (_, i) {
-        final it = items[i];
-        return it is DriveFolder
-            ? _folderGridTile(drive, it)
-            : _fileGridTile(drive, it as DriveFile);
-      },
+      slivers: [
+        if (folders.isNotEmpty) ...[
+          headerSliver('Folders', 4),
+          SliverPadding(
+            padding: const EdgeInsets.all(12),
+            sliver: SliverGrid.builder(
+              gridDelegate: delegate,
+              itemCount: folders.length,
+              itemBuilder: (_, i) => _folderGridTile(drive, folders[i]),
+            ),
+          ),
+        ],
+        if (files.isNotEmpty) ...[
+          headerSliver('Files', 0),
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
+            sliver: SliverGrid.builder(
+              gridDelegate: delegate,
+              itemCount: files.length,
+              itemBuilder: (_, i) => _fileGridTile(drive, files[i]),
+            ),
+          ),
+        ],
+      ],
     );
   }
 
-  Widget _folderTile(DriveData drive, DriveFolder fo) {
+  /// Folder avatar for list rows: owner avatar circle with a small purple
+  /// badge overlapping bottom-right (mirrors the web's .fav + .b).
+  Widget _folderRowAvatar(DriveData drive, String? owner) {
+    final theme = Theme.of(context);
+    if (owner == null) {
+      return const Icon(Icons.folder, size: 36, color: Color(0xFFD97706));
+    }
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        AvatarWidget(url: drive.avatars[owner], name: owner, radius: 18),
+        Positioned(
+          right: -4,
+          bottom: -4,
+          child: Container(
+            width: 18,
+            height: 18,
+            decoration: BoxDecoration(
+              color: const Color(0xFF9333EA),
+              shape: BoxShape.circle,
+              border: Border.all(color: theme.cardColor, width: 2),
+            ),
+            child: const Icon(Icons.folder, size: 9, color: Colors.white),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Folder row for the list card: avatar + bold name + purple owner pill,
+  /// item count caption, 3-dot menu at the right edge.
+  Widget _folderRow(DriveData drive, DriveFolder fo) {
     final selected = _selFolders.contains(fo.id);
     final count = _folderItemCount(drive, fo.id);
-    return ListTile(
-      leading: _inSelection
-          ? Checkbox(
-              value: selected, onChanged: (_) => _toggleFolder(fo.id))
-          : const Icon(Icons.folder_outlined, size: 36),
-      title: Text(fo.name,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(fontWeight: FontWeight.w600)),
-      subtitle: Text(
-          '$count item${count == 1 ? '' : 's'} · ${formatDate(fo.createdAt)}',
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis),
-      trailing: IconButton(
-        icon: const Icon(Icons.more_vert),
-        onPressed: () => _folderMenu(fo),
-      ),
-      selected: selected,
+    final owner = fo.owner;
+    final theme = Theme.of(context);
+    final brand = theme.colorScheme.primary;
+    return InkWell(
       onTap: () =>
           _inSelection ? _toggleFolder(fo.id) : _navigate(fo.id),
       onLongPress: () => _toggleFolder(fo.id),
+      child: Container(
+        color: selected ? brand.withOpacity(0.10) : null,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        child: Row(
+          children: [
+            _inSelection
+                ? Checkbox(
+                    value: selected,
+                    onChanged: (_) => _toggleFolder(fo.id))
+                : _folderRowAvatar(drive, owner),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(fo.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600)),
+                      ),
+                      if (owner != null) ...[
+                        const SizedBox(width: 6),
+                        _ownerBadge(owner),
+                      ],
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                      '$count item${count == 1 ? '' : 's'} · ${formatDate(fo.createdAt)}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 12, color: theme.hintColor)),
+                ],
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.more_vert),
+              onPressed: () => _folderMenu(fo),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
-  Widget _fileTile(DriveData drive, DriveFile f) {
+  /// File row for the list card: color tile icon, bold name, gray
+  /// "size · relative" caption, blue v2 pill, blue download button, 3-dot.
+  Widget _fileRow(DriveData drive, DriveFile f) {
     final selected = _selFiles.contains(f.id);
-    final highlighted = f.id == _highlightId;
     final theme = Theme.of(context);
+    final brand = theme.colorScheme.primary;
     return Builder(builder: (ctx) {
       _maybeScrollTo(ctx, f.id);
-      return ListTile(
-        tileColor: highlighted
-            ? theme.colorScheme.primary.withOpacity(0.12)
-            : null,
-        leading: _inSelection
-            ? Checkbox(
-                value: selected, onChanged: (_) => _toggleFile(f.id))
-            : FileTypeIcon(name: f.name, mime: f.type),
-        title: Row(
-          children: [
-            Expanded(
-              child: Text(f.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontWeight: FontWeight.w600)),
-            ),
-            if (f.isLocked) ...[
-              const SizedBox(width: 6),
-              Icon(Icons.lock, size: 14, color: theme.colorScheme.error),
-            ],
-            if (f.vc > 0) ...[
-              const SizedBox(width: 6),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.primary.withOpacity(0.14),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text('v${f.ver}',
-                    style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                        color: theme.colorScheme.primary)),
-              ),
-            ],
-            if (f.shares > 0) ...[
-              const SizedBox(width: 6),
-              Row(mainAxisSize: MainAxisSize.min, children: [
-                Icon(Icons.link, size: 13, color: Colors.grey.shade600),
-                const SizedBox(width: 2),
-                Text('${f.shares}',
-                    style: TextStyle(
-                        fontSize: 11, color: Colors.grey.shade600)),
-              ]),
-            ],
-          ],
-        ),
-        subtitle: Text(
-            '${formatBytes(f.size)} · ${timeAgo(f.uploadedAt)} · ${f.uploadedBy}',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis),
-        trailing: IconButton(
-          icon: const Icon(Icons.more_vert),
-          onPressed: () => _fileMenu(f),
-        ),
-        selected: selected,
+      final highlighted = f.id == _highlightId;
+      return InkWell(
         onTap: () => _inSelection ? _toggleFile(f.id) : _fileMenu(f),
         onLongPress: () => _toggleFile(f.id),
+        child: Container(
+          color:
+              selected || highlighted ? brand.withOpacity(0.10) : null,
+          padding:
+              const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          child: Row(
+            children: [
+              _inSelection
+                  ? Checkbox(
+                      value: selected,
+                      onChanged: (_) => _toggleFile(f.id))
+                  : FileTypeIcon(name: f.name, mime: f.type, size: 40),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(f.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600)),
+                        ),
+                        if (f.isLocked) ...[
+                          const SizedBox(width: 6),
+                          Icon(Icons.lock,
+                              size: 14,
+                              color: theme.colorScheme.error),
+                        ],
+                        if (f.ver > 1 || f.vc > 0) ...[
+                          const SizedBox(width: 6),
+                          _verBadge(f.ver),
+                        ],
+                        if (f.shares > 0) ...[
+                          const SizedBox(width: 6),
+                          Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.link,
+                                    size: 13,
+                                    color: Colors.grey.shade600),
+                                const SizedBox(width: 2),
+                                Text('${f.shares}',
+                                    style: TextStyle(
+                                        fontSize: 11,
+                                        color: Colors.grey.shade600)),
+                              ]),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                        '${formatBytes(f.size)} · ${formatRelativeMs(f.uploadedAt)}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            fontSize: 12, color: theme.hintColor)),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              f.url != null
+                  ? _dlButton(f)
+                  : Icon(Icons.lock_outline,
+                      size: 18, color: theme.colorScheme.error),
+              IconButton(
+                icon: const Icon(Icons.more_vert),
+                onPressed: () => _fileMenu(f),
+              ),
+            ],
+          ),
+        ),
       );
     });
   }
@@ -658,24 +1079,33 @@ class _DriveScreenState extends State<DriveScreen> {
     final selected = _selFolders.contains(fo.id);
     final theme = Theme.of(context);
     final count = _folderItemCount(drive, fo.id);
+    final owner = fo.owner;
+    final brand = theme.colorScheme.primary;
     return Card(
-      color: selected
-          ? theme.colorScheme.primary.withOpacity(0.14)
-          : null,
+      color: selected ? brand.withOpacity(0.08) : null,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(
+            color: selected ? brand : theme.dividerColor,
+            width: selected ? 2 : 1),
+      ),
+      clipBehavior: Clip.antiAlias,
       child: InkWell(
-        borderRadius: BorderRadius.circular(12),
         onTap: () =>
             _inSelection ? _toggleFolder(fo.id) : _navigate(fo.id),
         onLongPress: () => _toggleFolder(fo.id),
         child: Stack(
           children: [
             Padding(
-              padding: const EdgeInsets.all(10),
+              padding: const EdgeInsets.fromLTRB(10, 12, 10, 12),
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.folder_outlined,
-                      size: 44, color: theme.colorScheme.primary),
+                  if (owner != null)
+                    _ownerAvatar(owner, drive.avatars[owner])
+                  else
+                    Icon(Icons.folder_outlined,
+                        size: 44, color: theme.colorScheme.primary),
                   const SizedBox(height: 8),
                   Text(fo.name,
                       maxLines: 2,
@@ -683,6 +1113,10 @@ class _DriveScreenState extends State<DriveScreen> {
                       textAlign: TextAlign.center,
                       style: const TextStyle(
                           fontWeight: FontWeight.w600, fontSize: 13)),
+                  if (owner != null) ...[
+                    const SizedBox(height: 6),
+                    _ownerBadge(owner),
+                  ],
                   const SizedBox(height: 4),
                   Text('$count item${count == 1 ? '' : 's'}',
                       style: TextStyle(
@@ -698,8 +1132,8 @@ class _DriveScreenState extends State<DriveScreen> {
                     color: theme.colorScheme.primary),
               ),
             Positioned(
-              top: 2,
-              left: 2,
+              bottom: 2,
+              right: 2,
               child: IconButton(
                 iconSize: 18,
                 icon: const Icon(Icons.more_vert),
@@ -712,59 +1146,116 @@ class _DriveScreenState extends State<DriveScreen> {
     );
   }
 
+  /// File grid tile (mirrors the web): white rounded-16 card, a large
+  /// light-gray preview area on top with the color tile icon centered,
+  /// then file name (+ small type icon), gray "size · relative" caption,
+  /// 3-dot at the bottom-right.
   Widget _fileGridTile(DriveData drive, DriveFile f) {
     final selected = _selFiles.contains(f.id);
-    final highlighted = f.id == _highlightId;
     final theme = Theme.of(context);
+    final night = theme.brightness == Brightness.dark;
+    final brand = theme.colorScheme.primary;
+    final thumbBg =
+        night ? const Color(0xFF1B1B1B) : const Color(0xFFF2F1ED);
     return Builder(builder: (ctx) {
       _maybeScrollTo(ctx, f.id);
+      final highlighted = f.id == _highlightId;
       return Card(
-        color: highlighted
-            ? theme.colorScheme.primary.withOpacity(0.12)
-            : selected
-                ? theme.colorScheme.primary.withOpacity(0.14)
-                : null,
+        color: selected || highlighted
+            ? brand.withOpacity(0.06)
+            : null,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(
+              color: selected ? brand : theme.dividerColor,
+              width: selected ? 2 : 1),
+        ),
+        clipBehavior: Clip.antiAlias,
         child: InkWell(
-          borderRadius: BorderRadius.circular(12),
           onTap: () =>
               _inSelection ? _toggleFile(f.id) : _fileMenu(f),
           onLongPress: () => _toggleFile(f.id),
           child: Stack(
             children: [
-              Padding(
-                padding: const EdgeInsets.all(10),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    FileTypeIcon(
-                        name: f.name, mime: f.type, size: 48),
-                    const SizedBox(height: 8),
-                    Text(f.name,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                            fontWeight: FontWeight.w600, fontSize: 13)),
-                    const SizedBox(height: 4),
-                    Text(formatBytes(f.size),
-                        style: TextStyle(
-                            fontSize: 11, color: Colors.grey.shade600)),
-                    if (f.isLocked)
-                      Icon(Icons.lock,
-                          size: 14, color: theme.colorScheme.error),
-                  ],
-                ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Container(
+                    height: 104,
+                    color: thumbBg,
+                    child: Center(
+                      child: FileTypeIcon(
+                          name: f.name, mime: f.type, size: 56),
+                    ),
+                  ),
+                  Expanded(
+                    child: Padding(
+                      padding:
+                          const EdgeInsets.fromLTRB(12, 10, 34, 10),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Row(
+                            children: [
+                              FileTypeIcon(
+                                  name: f.name,
+                                  mime: f.type,
+                                  size: 16),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(f.name,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 13)),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                              '${formatBytes(f.size)} · ${formatRelativeMs(f.uploadedAt)}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                  fontSize: 11,
+                                  color: theme.hintColor)),
+                          if (f.ver > 1 ||
+                              f.vc > 0 ||
+                              f.isLocked) ...[
+                            const SizedBox(height: 4),
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (f.isLocked)
+                                  Icon(Icons.lock,
+                                      size: 13,
+                                      color:
+                                          theme.colorScheme.error),
+                                if (f.isLocked &&
+                                    (f.ver > 1 || f.vc > 0))
+                                  const SizedBox(width: 6),
+                                if (f.ver > 1 || f.vc > 0)
+                                  _verBadge(f.ver),
+                              ],
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
               ),
               if (selected)
                 Positioned(
                   top: 6,
                   right: 6,
-                  child: Icon(Icons.check_circle,
-                      color: theme.colorScheme.primary),
+                  child: Icon(Icons.check_circle, color: brand),
                 ),
               Positioned(
-                top: 2,
-                left: 2,
+                bottom: 6,
+                right: 6,
                 child: IconButton(
                   iconSize: 18,
                   icon: const Icon(Icons.more_vert),
@@ -1034,7 +1525,7 @@ class _DriveScreenState extends State<DriveScreen> {
                 title: Text(f.name,
                     maxLines: 2, overflow: TextOverflow.ellipsis),
                 subtitle: Text(
-                    '${formatBytes(f.size)} · ${timeAgo(f.uploadedAt)}'),
+                    '${formatBytes(f.size)} · ${formatRelativeMs(f.uploadedAt)}'),
               ),
               const Divider(height: 1),
               if (locked)
@@ -1534,7 +2025,7 @@ class _DriveScreenState extends State<DriveScreen> {
               _kv(theme, 'Location',
                   drive == null ? f.folder : _folderPathText(drive, f.folder)),
               _kv(theme, 'Uploaded',
-                  '${formatDateTime(f.uploadedAt)} (${timeAgo(f.uploadedAt)})'),
+                  '${formatDateTime(f.uploadedAt)} (${formatRelativeMs(f.uploadedAt)})'),
               _kv(theme, 'Uploaded by', f.uploadedBy),
               _kv(theme, 'Version',
                   'v${f.ver}${f.vc > 0 ? ' · ${f.vc} older' : ''}'),

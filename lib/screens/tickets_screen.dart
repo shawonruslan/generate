@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
 import '../models/models.dart';
@@ -20,6 +21,113 @@ const _ticketPriorities = ['low', 'normal', 'high'];
 
 String _cap(String s) =>
     s.isEmpty ? '—' : s[0].toUpperCase() + s.substring(1);
+
+// ---------------------------------------------------------------------------
+// Web ticket pill colors (.tst): day / night pairs, flat solid colors.
+// ---------------------------------------------------------------------------
+Color _tstOpenBg(bool n) => n ? const Color(0xFF0F2E22) : const Color(0xFFDCFCE7);
+Color _tstOpenFg(bool n) => n ? const Color(0xFF4ADE80) : const Color(0xFF15803D);
+Color _tstHighBg(bool n) => n ? const Color(0xFF3A1D1F) : const Color(0xFFFEE2E2);
+Color _tstHighFg(bool n) => n ? const Color(0xFFF87171) : const Color(0xFFB91C1C);
+Color _tstNormalBg(bool n) =>
+    n ? const Color(0xFF2B3242) : const Color(0xFFE0E7FF);
+Color _tstNormalFg(bool n) =>
+    n ? const Color(0xFFAEBAFF) : const Color(0xFF4338CA);
+Color _tstGrayBg(bool n) =>
+    n ? AppColors.nightSide2 : const Color(0xFFF1F5F9);
+Color _tstGrayFg(bool n) =>
+    n ? AppColors.nightMuted : const Color(0xFF475569);
+
+/// Small rounded status pill, like the web's .tst (11px/700, radius 20px).
+Widget _tstPill(String label, Color bg, Color fg, {IconData? icon}) {
+  return Container(
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+    decoration:
+        BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (icon != null) ...[
+          Icon(icon, size: 12, color: fg),
+          const SizedBox(width: 4),
+        ],
+        Text(label,
+            style: TextStyle(
+                fontSize: 11, fontWeight: FontWeight.w700, color: fg)),
+      ],
+    ),
+  );
+}
+
+Widget _statusPill(bool open, bool night) => _tstPill(
+    open ? 'OPEN' : 'CLOSED',
+    open ? _tstOpenBg(night) : _tstGrayBg(night),
+    open ? _tstOpenFg(night) : _tstGrayFg(night));
+
+Widget _priorityPill(String pri, bool night, {bool long = false}) {
+  final label = long ? '${pri.toUpperCase()} PRIORITY' : pri.toUpperCase();
+  switch (pri) {
+    case 'high':
+      return _tstPill(label, _tstHighBg(night), _tstHighFg(night));
+    case 'normal':
+      return _tstPill(label, _tstNormalBg(night), _tstNormalFg(night));
+    default:
+      return _tstPill(label, _tstGrayBg(night), _tstGrayFg(night));
+  }
+}
+
+Widget _categoryPill(String cat, bool night) => _tstPill(
+    _cap(cat), _tstGrayBg(night), _tstGrayFg(night),
+    icon: Icons.people_outline);
+
+/// "Nov 4, 2026, 12:54 AM" — absolute, like the web ticket info line.
+String _absoluteDateTime(int ms) {
+  if (ms <= 0) return '—';
+  return DateFormat('MMM d, yyyy, h:mm a')
+      .format(DateTime.fromMillisecondsSinceEpoch(ms));
+}
+
+// ---------------------------------------------------------------------------
+// Code-aware message text: ```fences``` and `inline` render in monospace.
+// ---------------------------------------------------------------------------
+List<TextSpan> _inlineCodeSpans(
+    String text, TextStyle base, TextStyle mono) {
+  final out = <TextSpan>[];
+  final inline = RegExp(r'`([^`]+)`');
+  var last = 0;
+  for (final m in inline.allMatches(text)) {
+    if (m.start > last) {
+      out.add(TextSpan(text: text.substring(last, m.start), style: base));
+    }
+    out.add(TextSpan(text: m.group(1), style: mono));
+    last = m.end;
+  }
+  if (last < text.length) {
+    out.add(TextSpan(text: text.substring(last), style: base));
+  }
+  return out;
+}
+
+List<TextSpan> _codeSpans(String text, TextStyle base) {
+  final mono = base.copyWith(
+      fontFamily: 'monospace',
+      fontFamilyFallback: const ['Menlo', 'Consolas', 'monospace']);
+  final out = <TextSpan>[];
+  final fence = RegExp(r'```([\s\S]*?)```');
+  var last = 0;
+  for (final m in fence.allMatches(text)) {
+    if (m.start > last) {
+      out.addAll(
+          _inlineCodeSpans(text.substring(last, m.start), base, mono));
+    }
+    out.add(TextSpan(text: '\n${m.group(1)!.trim()}\n', style: mono));
+    last = m.end;
+  }
+  if (last < text.length) {
+    out.addAll(_inlineCodeSpans(text.substring(last), base, mono));
+  }
+  return out;
+}
 
 class _NewTicketData {
   final String subject;
@@ -178,8 +286,8 @@ class _SupportScreenState extends State<SupportScreen> {
     if (_loading && _tickets.isEmpty) {
       body = const LoadingView(label: 'Loading tickets…');
     } else if (_error && _tickets.isEmpty) {
-      body = ErrorView(
-          message: 'Could not load tickets.', onRetry: () => _load());
+      body =
+          ErrorView(message: 'Could not load tickets.', onRetry: () => _load());
     } else {
       final list = _filtered;
       body = RefreshIndicator(
@@ -195,7 +303,7 @@ class _SupportScreenState extends State<SupportScreen> {
                             : 'No ${_filter} tickets.'))
               ])
             : ListView.builder(
-                padding: const EdgeInsets.all(12),
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
                 itemCount: list.length,
                 itemBuilder: (c, i) => _ticketCard(list[i], isAdmin,
                     session.user?.username ?? '', muted, night),
@@ -204,31 +312,45 @@ class _SupportScreenState extends State<SupportScreen> {
     }
 
     return Scaffold(
-      appBar: AppBar(
-        title: Text(isAdmin ? 'Tickets' : 'Support'),
-        actions: [
-          IconButton(
-              tooltip: 'Refresh',
-              onPressed: () => _load(),
-              icon: const Icon(Icons.refresh_outlined)),
-        ],
-      ),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
-            child: Row(
-              children: [
-                _filterChip('Open', 'open', openN),
-                const SizedBox(width: 8),
-                _filterChip('Closed', 'closed', closedN),
-                const SizedBox(width: 8),
-                _filterChip('All', 'all', _tickets.length),
-              ],
+      body: SafeArea(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 8, 0),
+              child: Row(
+                children: [
+                  const Text('Support tickets',
+                      style: TextStyle(
+                          fontSize: 22, fontWeight: FontWeight.w700)),
+                  const Spacer(),
+                  IconButton(
+                      tooltip: 'Refresh',
+                      onPressed: () => _load(),
+                      icon: const Icon(Icons.refresh_outlined)),
+                ],
+              ),
             ),
-          ),
-          Expanded(child: body),
-        ],
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 2, 16, 0),
+              child: Text('$openN open',
+                  style: TextStyle(fontSize: 13, color: muted)),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+              child: Row(
+                children: [
+                  _filterPill('Open', 'open', openN, night),
+                  const SizedBox(width: 8),
+                  _filterPill('Closed', 'closed', closedN, night),
+                  const SizedBox(width: 8),
+                  _filterPill('All', 'all', _tickets.length, night),
+                ],
+              ),
+            ),
+            Expanded(child: body),
+          ],
+        ),
       ),
       floatingActionButton: isAdmin
           ? null
@@ -240,35 +362,66 @@ class _SupportScreenState extends State<SupportScreen> {
     );
   }
 
-  Widget _filterChip(String label, String value, int count) {
+  /// Web .chip style: active = light-blue pill, blue text; else bordered.
+  Widget _filterPill(String label, String value, int count, bool night) {
     final selected = _filter == value;
-    return ChoiceChip(
-      label: Text('$label ($count)'),
-      selected: selected,
-      onSelected: (_) => setState(() => _filter = value),
+    final brand = night ? AppColors.brandDark : AppColors.brandLight;
+    return GestureDetector(
+      onTap: () => setState(() => _filter = value),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+        decoration: BoxDecoration(
+          color: selected
+              ? (night
+                  ? const Color(0xFF2B3242)
+                  : const Color(0x214A5FD0))
+              : (night ? AppColors.nightPanel : Colors.white),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+              color: selected
+                  ? const Color(0xFFC7D2FE)
+                  : (night ? AppColors.nightLine : AppColors.dayLine)),
+        ),
+        child: Text('$label ($count)',
+            style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+                color: selected
+                    ? brand
+                    : (night
+                        ? AppColors.nightMuted
+                        : AppColors.dayMuted))),
+      ),
     );
   }
 
   Widget _ticketCard(
       Ticket t, bool isAdmin, String me, Color muted, bool night) {
     final unread = _isUnread(t);
+    final brand = night ? AppColors.brandDark : AppColors.brandLight;
     final avatars = context.read<SessionProvider>().drive?.avatars;
-    return Card(
-      margin: const EdgeInsets.only(bottom: 8),
+    final panel = night ? AppColors.nightPanel : Colors.white;
+    final line = night ? AppColors.nightLine : AppColors.dayLine;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: panel,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: line),
+      ),
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
         onTap: () => _openThread(t),
         child: Padding(
-          padding: const EdgeInsets.all(12),
+          padding: const EdgeInsets.all(14),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (isAdmin)
-                Padding(
-                  padding: const EdgeInsets.only(right: 12),
-                  child: AvatarWidget(
-                      url: avatars?[t.user], name: t.user, radius: 20),
-                ),
+              Padding(
+                padding: const EdgeInsets.only(right: 12),
+                child: AvatarWidget(
+                    url: avatars?[t.user], name: t.user, radius: 20),
+              ),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -282,7 +435,7 @@ class _SupportScreenState extends State<SupportScreen> {
                               style: TextStyle(
                                   fontWeight: unread
                                       ? FontWeight.w800
-                                      : FontWeight.w600,
+                                      : FontWeight.w700,
                                   fontSize: 15)),
                         ),
                         if (unread)
@@ -291,35 +444,28 @@ class _SupportScreenState extends State<SupportScreen> {
                             width: 10,
                             height: 10,
                             decoration: BoxDecoration(
-                              color: Theme.of(context).colorScheme.primary,
+                              color: brand,
                               shape: BoxShape.circle,
                             ),
                           ),
                       ],
                     ),
-                    if (isAdmin)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 2),
-                        child: Text(t.user,
-                            style: TextStyle(fontSize: 12, color: muted)),
-                      ),
                     Padding(
-                      padding: const EdgeInsets.only(top: 4),
+                      padding: const EdgeInsets.only(top: 3),
                       child: Text(_preview(t, me, isAdmin),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(fontSize: 13, color: muted)),
                     ),
                     Padding(
-                      padding: const EdgeInsets.only(top: 8),
+                      padding: const EdgeInsets.only(top: 10),
                       child: Wrap(
                         spacing: 6,
                         runSpacing: 6,
                         children: [
-                          _miniChip(_cap(t.cat), null),
-                          _miniChip(_cap(t.pri), _priColor(t.pri, night)),
-                          _miniChip(t.isOpen ? 'Open' : 'Closed',
-                              t.isOpen ? const Color(0xFF46A758) : muted),
+                          _statusPill(t.isOpen, night),
+                          _priorityPill(t.pri, night),
+                          _categoryPill(t.cat, night),
                         ],
                       ),
                     ),
@@ -328,39 +474,13 @@ class _SupportScreenState extends State<SupportScreen> {
               ),
               Padding(
                 padding: const EdgeInsets.only(left: 8, top: 2),
-                child: Text(timeAgo(t.updatedAt),
+                child: Text(formatRelative(t.updatedAt),
                     style: TextStyle(fontSize: 11, color: muted)),
               ),
             ],
           ),
         ),
       ),
-    );
-  }
-
-  Color? _priColor(String pri, bool night) {
-    switch (pri) {
-      case 'high':
-        return night ? AppColors.dangerDark : AppColors.dangerLight;
-      case 'normal':
-        return AppColors.warn;
-      default:
-        return null;
-    }
-  }
-
-  Widget _miniChip(String label, Color? color) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: (color ?? Colors.grey).withOpacity(0.14),
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Text(label,
-          style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-              color: color ?? Colors.grey)),
     );
   }
 }
@@ -483,7 +603,7 @@ class _NewTicketDialogState extends State<_NewTicketDialog> {
   }
 }
 
-/// Thread view for one ticket: messages, reply box, close/reopen, delete.
+/// Thread view for one ticket: messages, reply box, mark solved, delete.
 class _TicketThreadScreen extends StatefulWidget {
   final Ticket ticket;
   final bool isAdmin;
@@ -599,8 +719,13 @@ class _TicketThreadScreenState extends State<_TicketThreadScreen> {
     final theme = Theme.of(context);
     final night = theme.brightness == Brightness.dark;
     final muted = night ? AppColors.nightMuted : AppColors.dayMuted;
+    final panel = night ? AppColors.nightPanel : Colors.white;
+    final line = night ? AppColors.nightLine : AppColors.dayLine;
+    final brand = night ? AppColors.brandDark : AppColors.brandLight;
+    final danger = night ? AppColors.dangerDark : AppColors.dangerLight;
     final canClose =
         widget.isAdmin || _ticket.user == widget.me; // member: own ticket
+    final avatars = context.read<SessionProvider>().drive?.avatars;
 
     // Report back to the ticket list whether anything changed, so it refreshes.
     return PopScope(
@@ -610,140 +735,209 @@ class _TicketThreadScreenState extends State<_TicketThreadScreen> {
         Navigator.of(context).pop(_changed ? true : result);
       },
       child: Scaffold(
-        appBar: AppBar(
-          title: Text(_ticket.subject,
-              maxLines: 1, overflow: TextOverflow.ellipsis),
-        actions: [
-          if (canClose)
-            TextButton.icon(
-              onPressed: _toggleStatus,
-              icon: Icon(
-                  _ticket.isOpen
-                      ? Icons.check_circle_outline
-                      : Icons.replay_outlined,
-                  size: 18),
-              label: Text(_ticket.isOpen ? 'Close' : 'Reopen'),
-            ),
-          if (widget.isAdmin)
-            IconButton(
-                tooltip: 'Delete ticket',
-                onPressed: _delete,
-                icon: const Icon(Icons.delete_outline)),
-        ],
-      ),
-      body: Column(
-        children: [
-          Expanded(
-            child: ListView(
-              padding: const EdgeInsets.all(12),
-              children: [
-                Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(_ticket.subject,
-                            style: const TextStyle(
-                                fontWeight: FontWeight.w700, fontSize: 16)),
-                        const SizedBox(height: 4),
-                        Text(
-                            'Opened by ${_ticket.user} · ${formatDateTime(_ticket.createdAt)}',
-                            style:
-                                TextStyle(fontSize: 12, color: muted)),
-                        const SizedBox(height: 8),
-                        Wrap(
-                          spacing: 6,
-                          children: [
-                            Chip(
-                                label: Text(_cap(_ticket.cat)),
-                                visualDensity: VisualDensity.compact),
-                            Chip(
-                                label: Text(_cap(_ticket.pri)),
-                                visualDensity: VisualDensity.compact),
-                            Chip(
-                              label: Text(
-                                  _ticket.isOpen ? 'Open' : 'Closed'),
-                              visualDensity: VisualDensity.compact,
-                              backgroundColor: _ticket.isOpen
-                                  ? const Color(0xFF46A758)
-                                      .withOpacity(0.15)
-                                  : null,
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
+        body: SafeArea(
+          child: Column(
+            children: [
+              // Header card: back arrow + avatar + bold title.
+              Container(
+                margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+                padding: const EdgeInsets.fromLTRB(4, 8, 12, 12),
+                decoration: BoxDecoration(
+                  color: panel,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: line),
                 ),
-                if (!_ticket.isOpen)
-                  Container(
-                    margin: const EdgeInsets.only(top: 8),
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: AppColors.warn.withOpacity(0.12),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Row(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
                       children: [
-                        const Icon(Icons.info_outline, size: 18),
-                        const SizedBox(width: 8),
-                        const Expanded(
-                            child: Text(
-                                'This ticket is closed. Replying will reopen it.',
-                                style: TextStyle(fontSize: 13))),
+                        IconButton(
+                          tooltip: 'Back',
+                          onPressed: () =>
+                              Navigator.of(context).maybePop(),
+                          icon: const Icon(Icons.arrow_back_outlined),
+                        ),
+                        AvatarWidget(
+                            url: avatars?[_ticket.user],
+                            name: _ticket.user,
+                            radius: 18),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(_ticket.subject,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 16)),
+                        ),
                       ],
                     ),
-                  ),
-                const SizedBox(height: 8),
-                ..._msgs.map(_bubble),
-              ],
-            ),
-          ),
-          const Divider(height: 1),
-          SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Expanded(
-                    child: CallbackShortcuts(
-                      bindings: {
-                        const SingleActivator(LogicalKeyboardKey.enter,
-                            control: true): _send,
-                      },
-                      child: TextField(
-                        controller: _replyCtrl,
-                        minLines: 1,
-                        maxLines: 5,
-                        maxLength: 3000,
-                        textInputAction: TextInputAction.newline,
-                        decoration: const InputDecoration(
-                          hintText: 'Write a reply… (Ctrl+Enter to send)',
-                          counterText: '',
-                        ),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 10, 0, 0),
+                      child: Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: [
+                          _statusPill(_ticket.isOpen, night),
+                          _priorityPill(_ticket.pri, night, long: true),
+                          _tstPill(
+                              '${_cap(_ticket.cat)} · ${_ticket.user} · #${_ticket.id}',
+                              _tstGrayBg(night),
+                              _tstGrayFg(night)),
+                        ],
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  IconButton.filled(
-                    tooltip: 'Send reply',
-                    onPressed: _sending ? null : _send,
-                    icon: _sending
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(
-                                strokeWidth: 2, color: Colors.white))
-                        : const Icon(Icons.send_outlined),
-                  ),
-                ],
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 10, 0, 0),
+                      child: Text(
+                          '${_ticket.user} opened this ticket · ${_absoluteDateTime(_ticket.createdAt)}',
+                          style:
+                              TextStyle(fontSize: 12, color: muted)),
+                    ),
+                    if (canClose || widget.isAdmin)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 12, 0, 0),
+                        child: Row(
+                          children: [
+                            if (canClose)
+                              Expanded(
+                                child: SizedBox(
+                                  height: 44,
+                                  child: ElevatedButton.icon(
+                                    onPressed: _toggleStatus,
+                                    icon: Icon(
+                                        _ticket.isOpen
+                                            ? Icons.check
+                                            : Icons.replay_outlined,
+                                        size: 18),
+                                    label: Text(_ticket.isOpen
+                                        ? 'Mark as solved'
+                                        : 'Reopen'),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor:
+                                          const Color(0xFF1B1B1E),
+                                      foregroundColor: Colors.white,
+                                      elevation: 0,
+                                      shape: RoundedRectangleBorder(
+                                          borderRadius:
+                                              BorderRadius.circular(10)),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            if (canClose && widget.isAdmin)
+                              const SizedBox(width: 8),
+                            if (widget.isAdmin)
+                              SizedBox(
+                                height: 44,
+                                child: ElevatedButton(
+                                  onPressed: _delete,
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: danger,
+                                    foregroundColor: Colors.white,
+                                    elevation: 0,
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 16),
+                                    shape: RoundedRectangleBorder(
+                                        borderRadius:
+                                            BorderRadius.circular(10)),
+                                  ),
+                                  child:
+                                      const Icon(Icons.delete_outline),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                  ],
+                ),
               ),
-            ),
+              Expanded(
+                child: ListView(
+                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+                  children: [
+                    if (!_ticket.isOpen)
+                      Container(
+                        margin: const EdgeInsets.only(bottom: 8),
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: AppColors.warn.withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.info_outline, size: 18),
+                            const SizedBox(width: 8),
+                            const Expanded(
+                                child: Text(
+                                    'This ticket is closed. Replying will reopen it.',
+                                    style: TextStyle(fontSize: 13))),
+                          ],
+                        ),
+                      ),
+                    ..._msgs.map(_bubble),
+                  ],
+                ),
+              ),
+              const Divider(height: 1),
+              SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Expanded(
+                        child: CallbackShortcuts(
+                          bindings: {
+                            const SingleActivator(LogicalKeyboardKey.enter,
+                                control: true): _send,
+                          },
+                          child: TextField(
+                            controller: _replyCtrl,
+                            minLines: 1,
+                            maxLines: 5,
+                            maxLength: 3000,
+                            textInputAction: TextInputAction.newline,
+                            decoration: const InputDecoration(
+                              hintText:
+                                  'Reply likhun… (Ctrl + Enter = send)',
+                              counterText: '',
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        width: 48,
+                        height: 48,
+                        child: ElevatedButton(
+                          onPressed: _sending ? null : _send,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: brand,
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                            padding: EdgeInsets.zero,
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10)),
+                          ),
+                          child: _sending
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.white))
+                              : const Icon(Icons.send),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ),
-        ],
-      ),
+        ),
       ),
     );
   }
@@ -752,19 +946,21 @@ class _TicketThreadScreenState extends State<_TicketThreadScreen> {
     final theme = Theme.of(context);
     final night = theme.brightness == Brightness.dark;
     final muted = night ? AppColors.nightMuted : AppColors.dayMuted;
+    final brand = night ? AppColors.brandDark : AppColors.brandLight;
     final mine = m.by == widget.me;
+    final bg = night ? AppColors.nightSide2 : const Color(0xFFF4F2EC);
+    final fg = night ? AppColors.nightText : AppColors.dayText;
     return Align(
       alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: 4),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        padding:
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         constraints: BoxConstraints(
             maxWidth: MediaQuery.of(context).size.width * 0.78),
         decoration: BoxDecoration(
-          color: mine
-              ? theme.colorScheme.primary
-              : (night ? AppColors.nightSide2 : const Color(0xFFEFEDE6)),
-          borderRadius: BorderRadius.circular(12).copyWith(
+          color: bg,
+          borderRadius: BorderRadius.circular(14).copyWith(
             topRight: mine ? const Radius.circular(4) : null,
             topLeft: mine ? null : const Radius.circular(4),
           ),
@@ -779,15 +975,19 @@ class _TicketThreadScreenState extends State<_TicketThreadScreen> {
                     style: TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.w700,
-                        color: theme.colorScheme.primary)),
+                        color: brand)),
               ),
-            Text(m.text,
-                style: TextStyle(color: mine ? Colors.white : null)),
+            RichText(
+                text: TextSpan(
+                    children: _codeSpans(
+                        m.text,
+                        TextStyle(
+                            fontSize: 14,
+                            color: fg,
+                            height: 1.35)))),
             const SizedBox(height: 4),
-            Text(timeAgo(m.at),
-                style: TextStyle(
-                    fontSize: 10,
-                    color: mine ? Colors.white70 : muted)),
+            Text(formatRelative(m.at),
+                style: TextStyle(fontSize: 10, color: muted)),
           ],
         ),
       ),

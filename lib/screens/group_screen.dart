@@ -163,98 +163,133 @@ class _GroupScreenState extends State<GroupScreen> {
     final me = _me;
     final theme = Theme.of(context);
     final night = theme.brightness == Brightness.dark;
+    final brand = night ? AppColors.brandDark : AppColors.brandLight;
+    final muted = night ? AppColors.nightMuted : AppColors.dayMuted;
     return Card(
-      margin: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
+      margin: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // 3px brand accent bar on top (web: .gp-composer::before).
+          Container(height: 3, color: brand),
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
               children: [
-                AvatarWidget(
-                    url: _feed?.avatars[me?.username], name: me?.username ?? '?', radius: 20),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: TextField(
-                    controller: _captionCtrl,
-                    focusNode: _captionFocus,
-                    maxLength: 500,
-                    maxLines: null,
-                    minLines: 2,
-                    textInputAction: TextInputAction.newline,
-                    decoration: const InputDecoration(
-                      hintText: 'Share something with the team…',
-                      border: InputBorder.none,
-                      filled: false,
-                      counterText: '',
-                      contentPadding: EdgeInsets.zero,
-                    ),
-                    onChanged: (_) => setState(() {}),
-                  ),
-                ),
-              ],
-            ),
-            if (_attachName != null)
-              Container(
-                margin: const EdgeInsets.only(top: 8),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: night ? AppColors.nightSide2 : const Color(0xFFEFEDE6),
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Icon(Icons.attach_file, size: 16),
-                    const SizedBox(width: 6),
-                    Flexible(
-                      child: Text(
-                        '$_attachName · ${formatBytes(_attachSize)}',
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 12),
+                    AvatarWidget(
+                        url: _feed?.avatars[me?.username],
+                        name: me?.username ?? '?',
+                        radius: 21),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: night
+                              ? AppColors.nightSide2
+                              : const Color(0xFFF4F2ED),
+                          border: Border.all(
+                              color: night
+                                  ? AppColors.nightLine
+                                  : AppColors.dayLine),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: TextField(
+                          controller: _captionCtrl,
+                          focusNode: _captionFocus,
+                          maxLength: 500,
+                          maxLines: null,
+                          minLines: 2,
+                          textInputAction: TextInputAction.newline,
+                          decoration: const InputDecoration(
+                            hintText:
+                                'Sobai ke kichu janate chan? Caption likhun… (file charao post kora jay)',
+                            border: InputBorder.none,
+                            filled: false,
+                            counterText: '',
+                            contentPadding: EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 10),
+                          ),
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 4),
-                    InkWell(
-                      onTap: _removeAttachment,
-                      child: const Icon(Icons.close, size: 16),
                     ),
                   ],
                 ),
-              ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                TextButton.icon(
-                  onPressed: _posting ? null : _pickAttachment,
-                  icon: const Icon(Icons.attach_file, size: 18),
-                  label: const Text('Attach'),
-                ),
-                const Spacer(),
-                Text(
-                  '${_captionCtrl.text.length}/500',
-                  style: TextStyle(
-                      fontSize: 12,
-                      color:
-                          night ? AppColors.nightMuted : AppColors.dayMuted),
-                ),
-                const SizedBox(width: 8),
-                ElevatedButton(
-                  onPressed: _posting ? null : _post,
-                  child: _posting
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(
-                              strokeWidth: 2, color: Colors.white))
-                      : const Text('Post'),
+                if (_attachName != null)
+                  Container(
+                    margin: const EdgeInsets.only(top: 8),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: night
+                          ? AppColors.nightSide2
+                          : const Color(0xFFEFEDE6),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.attach_file, size: 16),
+                        const SizedBox(width: 6),
+                        Flexible(
+                          child: Text(
+                            '$_attachName · ${formatBytes(_attachSize)}',
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        InkWell(
+                          onTap: _removeAttachment,
+                          child: const Icon(Icons.close, size: 16),
+                        ),
+                      ],
+                    ),
+                  ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    TextButton.icon(
+                      onPressed: _posting ? null : _pickAttachment,
+                      icon: const Icon(Icons.attach_file, size: 16),
+                      label: const Text('Attach'),
+                      style: TextButton.styleFrom(
+                        backgroundColor: night
+                            ? AppColors.nightSide2
+                            : const Color(0xFFEFEDE6),
+                        foregroundColor: muted,
+                        shape: const StadiumBorder(),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 8),
+                        textStyle: const TextStyle(fontSize: 13),
+                      ),
+                    ),
+                    const Spacer(),
+                    ElevatedButton.icon(
+                      onPressed: _posting ? null : _post,
+                      icon: _posting
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: Colors.white))
+                          : const Icon(Icons.send, size: 16),
+                      label: const Text('Post'),
+                      style: ElevatedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 8),
+                        textStyle: const TextStyle(fontSize: 13),
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -482,10 +517,17 @@ class _GroupScreenState extends State<GroupScreen> {
               icon: const Icon(Icons.visibility_outlined, size: 20),
               onPressed: () => _previewFile(f),
             ),
-            IconButton(
-              tooltip: 'Download',
-              icon: const Icon(Icons.download_outlined, size: 20),
+            const SizedBox(width: 4),
+            ElevatedButton.icon(
               onPressed: () => _downloadFile(f),
+              icon: const Icon(Icons.download, size: 16),
+              label: const Text('Download'),
+              style: ElevatedButton.styleFrom(
+                minimumSize: const Size(0, 32),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                textStyle: const TextStyle(fontSize: 12),
+              ),
             ),
           ],
         ),
@@ -551,24 +593,26 @@ class _GroupScreenState extends State<GroupScreen> {
                             const SizedBox(width: 6),
                             Container(
                               padding: const EdgeInsets.symmetric(
-                                  horizontal: 6, vertical: 2),
+                                  horizontal: 7, vertical: 2),
                               decoration: BoxDecoration(
-                                color: theme.colorScheme.primary
-                                    .withOpacity(0.15),
+                                color: night
+                                    ? AppColors.brandDark
+                                    : AppColors.brandLight,
                                 borderRadius: BorderRadius.circular(6),
                               ),
-                              child: Text('ADMIN',
+                              child: const Text('ADMIN',
                                   style: TextStyle(
                                       fontSize: 10,
                                       fontWeight: FontWeight.w800,
-                                      color: theme.colorScheme.primary)),
+                                      letterSpacing: 0.07 * 10,
+                                      color: Colors.white)),
                             ),
                           ],
                         ],
                       ),
                       Tooltip(
                         message: formatDateTime(p.ts),
-                        child: Text(timeAgo(p.ts),
+                        child: Text(formatRelative(p.ts),
                             style: TextStyle(
                                 fontSize: 12,
                                 color: night
@@ -628,6 +672,42 @@ class _GroupScreenState extends State<GroupScreen> {
         ),
       );
 
+  Widget _pageHeader() {
+    final theme = Theme.of(context);
+    final night = theme.brightness == Brightness.dark;
+    final muted = night ? AppColors.nightMuted : AppColors.dayMuted;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 14, 12, 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Text('Group',
+                  style:
+                      TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+              const Spacer(),
+              IconButton(
+                tooltip: 'Refresh',
+                icon: const Icon(Icons.refresh, size: 20),
+                onPressed: _load,
+              ),
+            ],
+          ),
+          Row(
+            children: [
+              Text('Admin + sob member er shared space',
+                  style: TextStyle(fontSize: 13, color: muted)),
+              const SizedBox(width: 8),
+              Text('${_feed?.posts.length ?? 0} posts',
+                  style: TextStyle(fontSize: 12, color: muted)),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   // ---------------- build ----------------
 
   @override
@@ -643,6 +723,7 @@ class _GroupScreenState extends State<GroupScreen> {
                     controller: _scrollCtrl,
                     physics: const AlwaysScrollableScrollPhysics(),
                     slivers: [
+                      SliverToBoxAdapter(child: _pageHeader()),
                       SliverToBoxAdapter(child: _composer()),
                       if ((_feed?.posts ?? []).isEmpty)
                         const SliverFillRemaining(

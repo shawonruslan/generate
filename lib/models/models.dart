@@ -17,12 +17,14 @@ class DriveFolder {
   final String name;
   final String parent;
   final int createdAt;
-  DriveFolder({required this.id, required this.name, required this.parent, required this.createdAt});
+  final String? owner; // set on member home folders ("only owner + admin can see")
+  DriveFolder({required this.id, required this.name, required this.parent, required this.createdAt, this.owner});
   factory DriveFolder.fromJson(String id, Map<String, dynamic> j) => DriveFolder(
         id: id,
         name: (j['name'] ?? 'Untitled').toString(),
         parent: (j['parent'] ?? 'root').toString(),
         createdAt: (j['createdAt'] ?? 0) as int,
+        owner: j['owner']?.toString(),
       );
 }
 
@@ -260,8 +262,10 @@ class Note {
   bool pinned;
   bool archived;
   List<String> labels;
+  int updatedAt;
   Note({this.id, this.title = '', this.body = '', this.items, this.color,
-    this.pinned = false, this.archived = false, this.labels = const []});
+    this.pinned = false, this.archived = false, this.labels = const [],
+    this.updatedAt = 0});
   factory Note.fromJson(Map<String, dynamic> j) => Note(
         id: j['id']?.toString(),
         title: (j['title'] ?? '').toString(),
@@ -271,6 +275,7 @@ class Note {
         pinned: (j['pinned'] ?? false) as bool,
         archived: (j['archived'] ?? false) as bool,
         labels: ((j['labels'] as List?) ?? []).map((e) => e.toString()).toList(),
+        updatedAt: (j['updatedAt'] ?? 0) as int,
       );
   Map<String, dynamic> toJson() => {
         if (id != null) 'id': id,
@@ -433,10 +438,32 @@ class DiarySticker {
         k: j['k']?.toString(),
         url: j['u']?.toString(),
       );
+  // NOTE: the signed 'u' URL is stripped on save, exactly like the web app
+  // (stk.map(({ u, ...x }) => x)) — the server re-injects it on GET.
   Map<String, dynamic> toJson() => {
         'id': id, 'x': x, 'y': y, 'w': w, 'a': a, 'r': r,
-        if (k != null) 'k': k, if (url != null) 'u': url,
+        if (k != null) 'k': k,
       };
+}
+
+/// One drawing stroke. Coordinates live in the web app's 1000-unit page
+/// space (page width = 1000 units on every screen), so drawings render at
+/// the same place on web and mobile.
+/// t: 'p' free pen, 'b' marker brush, 'e' circle, 'r' rectangle, 'a' arrow.
+/// c: color key ('', 'black', 'red', 'green', 'purple', 'brown' for pen;
+///    'yellow', 'green', 'pink', 'blue', 'orange' for marker).
+/// d: flat [x1,y1,x2,y2,...] (shapes carry exactly 4 numbers).
+class DiaryStroke {
+  final String t;
+  final String c;
+  final List<int> d;
+  const DiaryStroke({required this.t, required this.c, required this.d});
+  factory DiaryStroke.fromJson(Map<String, dynamic> j) => DiaryStroke(
+        t: (j['t'] ?? 'p').toString(),
+        c: (j['c'] ?? '').toString(),
+        d: ((j['d'] as List?) ?? []).map((e) => (e as num).round()).toList(),
+      );
+  Map<String, dynamic> toJson() => {'t': t, 'c': c, 'd': d};
 }
 
 class DiaryEntry {
@@ -445,25 +472,28 @@ class DiaryEntry {
   String mood;
   int at;
   String? html;
-  String? draw;
+  List<DiaryStroke> draw;
   List<DiarySticker> stickers;
   DiaryEntry({required this.date, this.text = '', this.mood = '', this.at = 0,
-    this.html, this.draw, List<DiarySticker>? stickers})
-      : stickers = stickers ?? [];
+    this.html, List<DiaryStroke>? draw, List<DiarySticker>? stickers})
+      : draw = draw ?? [],
+        stickers = stickers ?? [];
   factory DiaryEntry.fromJson(String date, Map<String, dynamic> j) => DiaryEntry(
         date: date,
         text: (j['text'] ?? '').toString(),
         mood: (j['mood'] ?? '').toString(),
         at: (j['at'] ?? 0) as int,
         html: j['html']?.toString(),
-        draw: j['draw']?.toString(),
+        draw: ((j['draw'] as List?) ?? [])
+            .map((e) => DiaryStroke.fromJson(Map<String, dynamic>.from(e as Map)))
+            .toList(),
         stickers: ((j['stk'] as List?) ?? [])
             .map((e) => DiarySticker.fromJson(Map<String, dynamic>.from(e))).toList(),
       );
   Map<String, dynamic> toJson() => {
         'date': date, 'text': text, 'mood': mood,
-        if (html != null) 'html': html,
-        if (draw != null) 'draw': draw,
+        if (html != null && html!.isNotEmpty) 'html': html,
+        if (draw.isNotEmpty) 'draw': draw.map((s) => s.toJson()).toList(),
         if (stickers.isNotEmpty) 'stk': stickers.map((s) => s.toJson()).toList(),
       };
 }

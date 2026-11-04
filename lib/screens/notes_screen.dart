@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
 import '../api/api_client.dart';
 import '../models/models.dart';
 import '../providers/app_state.dart';
+import '../theme/app_theme.dart';
 import '../widgets/app_widgets.dart';
 
 /// Private notes, Google-Keep-like. Parity with the web app's Notes view:
@@ -114,11 +117,139 @@ class _NotesScreenState extends State<NotesScreen> {
     _openEditor(null);
   }
 
-  Future<void> _openEditor(Note? note) async {
+  Future<void> _openEditor(Note? note, {bool checklist = false}) async {
     final changed = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(builder: (_) => _NoteEditorPage(note: note)),
+      MaterialPageRoute(
+          builder: (_) =>
+              _NoteEditorPage(note: note, startChecklist: checklist)),
     );
     if (changed == true && mounted) _load();
+  }
+
+  /// Deep copy used by the card quick-actions (pin / archive / color / items).
+  Note _clone(Note n) => Note(
+        id: n.id,
+        title: n.title,
+        body: n.body,
+        items:
+            n.items?.map((i) => NoteItem(t: i.t, d: i.d)).toList(),
+        color: n.color,
+        pinned: n.pinned,
+        archived: n.archived,
+        labels: List.of(n.labels),
+      );
+
+  /// Web-app `quick(patch)`: save a patched note, then refresh the list.
+  Future<void> _quickSave(Note n) async {
+    final ok = await guard(context, () => _api.saveNote(n));
+    if (ok != null && mounted) _load();
+  }
+
+  Future<void> _togglePin(Note n) async {
+    final c = _clone(n);
+    c.pinned = !c.pinned;
+    await _quickSave(c);
+  }
+
+  Future<void> _toggleArchive(Note n) async {
+    final c = _clone(n);
+    c.archived = !c.archived;
+    c.pinned = false;
+    final ok = await guard(context, () => _api.saveNote(c));
+    if (ok != null && mounted) {
+      showMsg(context, c.archived ? 'Note archived' : 'Note unarchived');
+      _load();
+    }
+  }
+
+  Future<void> _toggleItem(Note n, NoteItem it) async {
+    final c = _clone(n);
+    c.items = (n.items ?? [])
+        .map((i) => NoteItem(t: i.t, d: identical(i, it) ? !i.d : i.d))
+        .toList();
+    await _quickSave(c);
+  }
+
+  Future<void> _pickColor(Note n) async {
+    final theme = Theme.of(context);
+    final night = theme.brightness == Brightness.dark;
+    final chosen = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Background'),
+        content: Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          children: [
+            for (final k in _colorKeys)
+              GestureDetector(
+                onTap: () => Navigator.of(ctx).pop(k),
+                child: Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: _noteBg(k, theme.brightness),
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: k == n.color
+                          ? (night
+                              ? AppColors.brandDark
+                              : AppColors.brandLight)
+                          : theme.dividerColor,
+                      width: k == n.color ? 2.5 : 1,
+                    ),
+                  ),
+                  child: k == n.color
+                      ? Icon(Icons.check,
+                          size: 18,
+                          color:
+                              _noteFg(k, theme.brightness))
+                      : null,
+                ),
+              ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+    if (chosen != null && chosen != n.color && mounted) {
+      final c = _clone(n);
+      c.color = chosen;
+      await _quickSave(c);
+    }
+  }
+
+  /// Web-app "Copy text": copies title + checklist/body to the clipboard.
+  Future<void> _copyNoteText(Note n) async {
+    final items = n.items ?? [];
+    final parts = <String>[];
+    if (n.title.isNotEmpty) parts.add(n.title);
+    if (items.isNotEmpty) {
+      parts.add(items.map((x) => '${x.d ? '[x]' : '[ ]'} ${x.t}').join('\n'));
+    } else if (n.body.isNotEmpty) {
+      parts.add(n.body);
+    }
+    await Clipboard.setData(ClipboardData(text: parts.join('\n\n')));
+    if (mounted) showMsg(context, 'Note copied');
+  }
+
+  Future<void> _deleteNote(Note n) async {
+    final id = n.id;
+    if (id == null) return;
+    final yes = await confirmDialog(context,
+        title: 'Delete note?',
+        message: 'This note will be permanently deleted.');
+    if (!yes || !mounted) return;
+    final ok = await guard(context, () async {
+      await _api.deleteNote(id);
+      return true;
+    });
+    if (ok == true && mounted) _load();
   }
 
   List<Note> get _visible {
@@ -138,13 +269,23 @@ class _NotesScreenState extends State<NotesScreen> {
     return list;
   }
 
+  /// Web-app parity card: colored pastel bg, blue pin top-right, tappable
+  /// square checkboxes, bottom tools row (palette / archive / copy / delete).
+  /// Interactive children are never nested inside another tap handler, so a
+  /// tap does exactly one thing (mirrors the web's stopPropagation).
   Widget _noteCard(Note n) {
     final theme = Theme.of(context);
     final b = theme.brightness;
+    final night = b == Brightness.dark;
+    final brand = night ? AppColors.brandDark : AppColors.brandLight;
     final bg = _noteBg(n.color, b);
     final fg = _noteFg(n.color, b);
+    final dim = fg.withOpacity(0.55);
     final items = n.items ?? [];
-    final done = items.where((i) => i.d).length;
+    void open() => _openEditor(n);
+
+    final titleStyle = TextStyle(
+        fontSize: 15, fontWeight: FontWeight.w600, color: fg);
 
     Widget? preview;
     if (items.isNotEmpty) {
@@ -156,243 +297,473 @@ class _NotesScreenState extends State<NotesScreen> {
         children: [
           for (final it in shown)
             Padding(
-              padding: const EdgeInsets.symmetric(vertical: 2),
+              padding: const EdgeInsets.symmetric(vertical: 3),
               child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(
-                      it.d
-                          ? Icons.check_box_outlined
-                          : Icons.check_box_outline_blank,
-                      size: 15,
-                      color: fg.withOpacity(0.7)),
-                  const SizedBox(width: 6),
+                  SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: Checkbox(
+                      value: it.d,
+                      onChanged: (_) => _toggleItem(n, it),
+                      visualDensity: VisualDensity.compact,
+                      materialTapTargetSize:
+                          MaterialTapTargetSize.shrinkWrap,
+                      activeColor: brand,
+                    ),
+                  ),
+                  const SizedBox(width: 4),
                   Expanded(
-                    child: Text(it.t,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                            fontSize: 13,
-                            color: fg,
-                            decoration: it.d
-                                ? TextDecoration.lineThrough
-                                : null)),
+                    child: InkWell(
+                      onTap: open,
+                      child: Text(it.t,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                              fontSize: 13,
+                              color: fg,
+                              decoration: it.d
+                                  ? TextDecoration.lineThrough
+                                  : null)),
+                    ),
                   ),
                 ],
               ),
             ),
           if (items.length > 10)
-            Text('+${items.length - 10} more',
-                style: TextStyle(fontSize: 12, color: fg.withOpacity(0.7))),
+            InkWell(
+              onTap: open,
+              child: Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text('+${items.length - 10} more',
+                    style: TextStyle(fontSize: 12, color: dim)),
+              ),
+            ),
         ],
       );
     } else if (n.body.isNotEmpty) {
-      preview = Text(n.body,
-          maxLines: 6,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(fontSize: 13, color: fg));
+      preview = InkWell(
+        onTap: open,
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.only(top: 2),
+          child: Text(n.body,
+              maxLines: 8,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 13, color: fg)),
+        ),
+      );
     }
 
-    return InkWell(
-      borderRadius: BorderRadius.circular(12),
-      onTap: () => _openEditor(n),
-      child: Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: bg,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: theme.dividerColor),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: n.title.isEmpty
-                      ? const SizedBox.shrink()
-                      : Text(n.title,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                              fontWeight: FontWeight.w700, color: fg)),
-                ),
-                if (n.pinned)
-                  Padding(
-                    padding: const EdgeInsets.only(left: 4),
-                    child: Icon(Icons.push_pin,
-                        size: 15, color: fg.withOpacity(0.6)),
+    Widget toolBtn(IconData icon, String tip, VoidCallback onTap) =>
+        IconButton(
+          tooltip: tip,
+          icon: Icon(icon, size: 18),
+          color: dim,
+          visualDensity: VisualDensity.compact,
+          padding: const EdgeInsets.all(6),
+          constraints: const BoxConstraints(),
+          onPressed: onTap,
+        );
+
+    return Container(
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: theme.dividerColor),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: InkWell(
+                  onTap: open,
+                  borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(12)),
+                  child: Padding(
+                    padding:
+                        const EdgeInsets.fromLTRB(16, 14, 0, 2),
+                    child: n.title.isEmpty
+                        ? const SizedBox(height: 8)
+                        : Text(n.title,
+                            maxLines: 3,
+                            overflow: TextOverflow.ellipsis,
+                            style: titleStyle),
                   ),
-              ],
-            ),
-            if (preview != null) ...[
-              const SizedBox(height: 6),
-              preview,
-            ],
-            if (items.isNotEmpty) ...[
-              const SizedBox(height: 6),
-              Text('$done/${items.length} done',
-                  style: TextStyle(
-                      fontSize: 11, color: fg.withOpacity(0.6))),
-            ],
-            if (n.labels.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 4,
-                runSpacing: 4,
-                children: [
-                  for (final l in n.labels)
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 3),
-                      decoration: BoxDecoration(
-                        color: fg.withOpacity(0.08),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Text(l,
-                          style:
-                              TextStyle(fontSize: 11, color: fg)),
-                    ),
-                ],
+                ),
+              ),
+              Padding(
+                padding:
+                    const EdgeInsets.only(top: 8, right: 8),
+                child: IconButton(
+                  tooltip: n.pinned ? 'Unpin' : 'Pin',
+                  icon: Icon(
+                      n.pinned
+                          ? Icons.push_pin
+                          : Icons.push_pin_outlined,
+                      size: 18),
+                  color: n.pinned ? brand : dim,
+                  visualDensity: VisualDensity.compact,
+                  padding: const EdgeInsets.all(6),
+                  constraints: const BoxConstraints(),
+                  onPressed: () => _togglePin(n),
+                ),
               ),
             ],
+          ),
+          if (preview != null)
+            Padding(
+              padding:
+                  const EdgeInsets.fromLTRB(16, 2, 16, 0),
+              child: preview,
+            ),
+          if (n.labels.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            InkWell(
+              onTap: open,
+              child: Container(
+                width: double.infinity,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16),
+                child: Wrap(
+                  spacing: 4,
+                  runSpacing: 4,
+                  children: [
+                    for (final l in n.labels)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: night
+                              ? Colors.white.withOpacity(0.1)
+                              : Colors.black.withOpacity(0.07),
+                          borderRadius:
+                              BorderRadius.circular(12),
+                        ),
+                        child: Text(l,
+                            style: TextStyle(
+                                fontSize: 11, color: fg)),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 6, 8, 4),
+            child: Row(
+              children: [
+                toolBtn(Icons.palette_outlined, 'Background',
+                    () => _pickColor(n)),
+                toolBtn(
+                    n.archived
+                        ? Icons.unarchive_outlined
+                        : Icons.archive_outlined,
+                    n.archived ? 'Unarchive' : 'Archive',
+                    () => _toggleArchive(n)),
+                toolBtn(Icons.copy_outlined, 'Copy text',
+                    () => _copyNoteText(n)),
+                toolBtn(Icons.delete_outline, 'Delete',
+                    () => _deleteNote(n)),
+                const Spacer(),
+                if (n.updatedAt > 0)
+                  Text(
+                      DateFormat('MMM d, yyyy').format(
+                          DateTime.fromMillisecondsSinceEpoch(n.updatedAt)),
+                      style: TextStyle(fontSize: 11, color: dim)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Web `.sec-title`: 11px/800 uppercase, muted, with a divider rule after.
+  Widget _section(String label, bool night) => Padding(
+        padding: const EdgeInsets.fromLTRB(24, 22, 24, 10),
+        child: Row(
+          children: [
+            Text(label.toUpperCase(),
+                style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 1.1,
+                    color: night
+                        ? AppColors.nightMuted
+                        : AppColors.dayMuted)),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Container(
+                height: 1,
+                color: night
+                    ? AppColors.nightLine2
+                    : AppColors.dayLine,
+              ),
+            ),
+          ],
+        ),
+      );
+
+  /// "Notes" heading + Notes/Archive segmented control (web parity).
+  Widget _header(bool night) {
+    final brand = night ? AppColors.brandDark : AppColors.brandLight;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 20, 24, 0),
+      child: Row(
+        children: [
+          Text('Notes',
+              style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w700,
+                  color: night
+                      ? AppColors.nightText
+                      : AppColors.dayText)),
+          const Spacer(),
+          Container(
+            padding: const EdgeInsets.all(4),
+            decoration: BoxDecoration(
+              color: night
+                  ? AppColors.nightSide2
+                  : const Color(0xFFE4E1D6),
+              borderRadius: BorderRadius.circular(11),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _segBtn('Notes', Icons.lightbulb_outline,
+                    !_showArchived,
+                    () => setState(() => _showArchived = false),
+                    night, brand),
+                _segBtn('Archive', Icons.archive_outlined,
+                    _showArchived,
+                    () => setState(() => _showArchived = true),
+                    night, brand),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _segBtn(String label, IconData icon, bool active,
+      VoidCallback onTap, bool night, Color brand) {
+    final fg = active
+        ? (night ? Colors.white : const Color(0xFF1E40AF))
+        : (night ? AppColors.nightMuted : AppColors.dayMuted);
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding:
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: active
+              ? (night
+                  ? const Color(0xFF33415E)
+                  : const Color(0xFFD7E3FF))
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 16, color: fg),
+            const SizedBox(width: 6),
+            Text(label,
+                style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: fg)),
           ],
         ),
       ),
     );
   }
 
-  Widget _section(String label) => Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-        child: Text(label.toUpperCase(),
-            style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 1,
-                color: Theme.of(context).colorScheme.primary)),
-      );
+  /// "Take a note…" composer bar — checklist icon left, pencil right.
+  /// The middle area opens the text editor; the icons open their own modes.
+  /// (Icons are siblings of the tap area, never nested inside it, so one
+  /// tap can only ever fire one action.)
+  Widget _composerBar(bool night) {
+    final muted =
+        night ? AppColors.nightMuted : AppColors.dayMuted;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 12, 24, 0),
+      child: Container(
+        decoration: BoxDecoration(
+          color: night ? AppColors.nightPanel : Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+              color:
+                  night ? AppColors.nightLine : AppColors.dayLine),
+        ),
+        child: Row(
+          children: [
+            IconButton(
+              tooltip: 'New list',
+              icon:
+                  const Icon(Icons.checklist_outlined, size: 20),
+              color: muted,
+              onPressed: () =>
+                  _openEditor(null, checklist: true),
+            ),
+            Expanded(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => _openEditor(null),
+                child: Container(
+                  height: double.infinity,
+                  alignment: Alignment.centerLeft,
+                  child: Text('Take a note…',
+                      style:
+                          TextStyle(fontSize: 14, color: muted)),
+                ),
+              ),
+            ),
+            IconButton(
+              tooltip: 'New note',
+              icon: const Icon(Icons.edit_outlined, size: 20),
+              color: muted,
+              onPressed: () => _openEditor(null),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _searchBar(bool night) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 12, 24, 0),
+      child: TextField(
+        controller: _searchCtrl,
+        decoration: InputDecoration(
+          hintText: 'Search notes…',
+          prefixIcon: const Icon(Icons.search),
+          suffixIcon: _query.isEmpty
+              ? null
+              : IconButton(
+                  icon: const Icon(Icons.clear),
+                  onPressed: () {
+                    _searchCtrl.clear();
+                    setState(() => _query = '');
+                  }),
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 12),
+        ),
+        onChanged: (v) => setState(() => _query = v),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
+    final night = Theme.of(context).brightness == Brightness.dark;
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Notes'),
-        actions: [
-          IconButton(
-            tooltip: _showArchived ? 'Show notes' : 'Archived',
-            icon: Icon(_showArchived
-                ? Icons.note_outlined
-                : Icons.archive_outlined),
-            onPressed: () =>
-                setState(() => _showArchived = !_showArchived),
-          ),
-          IconButton(
-              tooltip: 'New note',
-              icon: const Icon(Icons.add),
-              onPressed: _openNew),
-        ],
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(56),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-            child: TextField(
-              controller: _searchCtrl,
-              decoration: InputDecoration(
-                hintText: 'Search notes…',
-                prefixIcon: const Icon(Icons.search),
-                suffixIcon: _query.isEmpty
-                    ? null
-                    : IconButton(
-                        icon: const Icon(Icons.clear),
-                        onPressed: () {
-                          _searchCtrl.clear();
-                          setState(() => _query = '');
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _header(night),
+          if (!_showArchived) _composerBar(night),
+          _searchBar(night),
+          Expanded(
+            child: _loading
+                ? const LoadingView(label: 'Loading notes…')
+                : _error != null
+                    ? ErrorView(
+                        message: _error!, onRetry: _load)
+                    : RefreshIndicator(
+                        onRefresh: _load,
+                        child: Builder(builder: (context) {
+                          final vis = _visible;
+                          if (vis.isEmpty) {
+                            return ListView(
+                              physics:
+                                  const AlwaysScrollableScrollPhysics(),
+                              children: [
+                                SizedBox(
+                                    height:
+                                        MediaQuery.of(context)
+                                                .size
+                                                .height *
+                                            0.55,
+                                    child: EmptyView(
+                                        icon: _showArchived
+                                            ? Icons.archive_outlined
+                                            : Icons
+                                                .lightbulb_outline,
+                                        message: _showArchived
+                                            ? 'No archived notes.'
+                                            : 'No notes yet — tap "Take a note…" to create one.')),
+                              ],
+                            );
+                          }
+                          final pinned = _showArchived
+                              ? <Note>[]
+                              : vis
+                                  .where((n) => n.pinned)
+                                  .toList();
+                          final others = _showArchived
+                              ? vis
+                              : vis
+                                  .where((n) => !n.pinned)
+                                  .toList();
+                          return LayoutBuilder(
+                              builder: (context, cons) {
+                            final maxW = cons.maxWidth;
+                            final cardW = maxW >= 700
+                                ? 300.0
+                                : (maxW - 48)
+                                    .clamp(200.0, 600.0);
+                            Widget wrap(List<Note> list) =>
+                                Padding(
+                                  padding:
+                                      const EdgeInsets.fromLTRB(
+                                          24, 0, 24, 12),
+                                  child: Wrap(
+                                    spacing: 12,
+                                    runSpacing: 12,
+                                    children: [
+                                      for (final n in list)
+                                        SizedBox(
+                                            width: cardW,
+                                            child:
+                                                _noteCard(n)),
+                                    ],
+                                  ),
+                                );
+                            return ListView(
+                              physics:
+                                  const AlwaysScrollableScrollPhysics(),
+                              children: [
+                                if (!_showArchived &&
+                                    pinned.isNotEmpty) ...[
+                                  _section('Pinned', night),
+                                  wrap(pinned),
+                                ],
+                                if (others.isNotEmpty) ...[
+                                  if (pinned.isNotEmpty &&
+                                      !_showArchived)
+                                    _section('Others', night),
+                                  if (_showArchived)
+                                    _section(
+                                        'Archived', night),
+                                  wrap(others),
+                                ],
+                                const SizedBox(height: 80),
+                              ],
+                            );
+                          });
                         }),
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 12),
-              ),
-              onChanged: (v) => setState(() => _query = v),
-            ),
+                      ),
           ),
-        ),
-      ),
-      body: _loading
-          ? const LoadingView(label: 'Loading notes…')
-          : _error != null
-              ? ErrorView(message: _error!, onRetry: _load)
-              : RefreshIndicator(
-                  onRefresh: _load,
-                  child: Builder(builder: (context) {
-                    final vis = _visible;
-                    if (vis.isEmpty) {
-                      return ListView(
-                        physics:
-                            const AlwaysScrollableScrollPhysics(),
-                        children: [
-                          SizedBox(
-                              height: MediaQuery.of(context)
-                                      .size
-                                      .height *
-                                  0.6,
-                              child: EmptyView(
-                                  icon: Icons.note_outlined,
-                                  message: _showArchived
-                                      ? 'No archived notes.'
-                                      : 'No notes yet — tap + to create one.')),
-                        ],
-                      );
-                    }
-                    final pinned =
-                        _showArchived ? <Note>[] : vis.where((n) => n.pinned).toList();
-                    final others =
-                        _showArchived ? vis : vis.where((n) => !n.pinned).toList();
-                    return LayoutBuilder(builder: (context, cons) {
-                      final cols = cons.maxWidth >= 600 ? 2 : 1;
-                      Widget grid(List<Note> list) => GridView.builder(
-                            shrinkWrap: true,
-                            physics:
-                                const NeverScrollableScrollPhysics(),
-                            padding: const EdgeInsets.fromLTRB(
-                                12, 0, 12, 12),
-                            gridDelegate:
-                                SliverGridDelegateWithFixedCrossAxisCount(
-                              crossAxisCount: cols,
-                              crossAxisSpacing: 10,
-                              mainAxisSpacing: 10,
-                              childAspectRatio:
-                                  cols == 1 ? 2.6 : 1.15,
-                            ),
-                            itemCount: list.length,
-                            itemBuilder: (_, i) =>
-                                _noteCard(list[i]),
-                          );
-                      return ListView(
-                        physics:
-                            const AlwaysScrollableScrollPhysics(),
-                        children: [
-                          if (!_showArchived && pinned.isNotEmpty) ...[
-                            _section('Pinned'),
-                            grid(pinned),
-                          ],
-                          if (others.isNotEmpty) ...[
-                            if (pinned.isNotEmpty &&
-                                !_showArchived)
-                              _section('Others'),
-                            if (_showArchived)
-                              _section('Archived'),
-                            grid(others),
-                          ],
-                          const SizedBox(height: 80),
-                        ],
-                      );
-                    });
-                  }),
-                ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _openNew,
-        tooltip: 'New note',
-        child: const Icon(Icons.add),
+        ],
       ),
     );
   }
@@ -405,7 +776,8 @@ class _NotesScreenState extends State<NotesScreen> {
 /// (web-app behavior).
 class _NoteEditorPage extends StatefulWidget {
   final Note? note;
-  const _NoteEditorPage({this.note});
+  final bool startChecklist;
+  const _NoteEditorPage({this.note, this.startChecklist = false});
 
   @override
   State<_NoteEditorPage> createState() => _NoteEditorPageState();
@@ -438,7 +810,12 @@ class _NoteEditorPageState extends State<_NoteEditorPage> {
     _color = n?.color ?? 'default';
     _pinned = n?.pinned ?? false;
     _archived = n?.archived ?? false;
-    _checklist = _items.isNotEmpty;
+    _checklist = _items.isNotEmpty || widget.startChecklist;
+    if (_checklist && _items.isEmpty) {
+      _items.add(NoteItem(t: '', d: false));
+      _itemFocus.add(FocusNode());
+      _itemCtrls.add(TextEditingController());
+    }
   }
 
   @override

@@ -66,7 +66,7 @@ class _SharesScreenState extends State<SharesScreen> {
       _shares = shares;
       _loading = false;
       for (final s in shares) {
-        _active.putIfAbsent(s.id, () => true);
+        _active.putIfAbsent(s.id, () => !s.disabled);
       }
     });
   }
@@ -262,7 +262,7 @@ class _SharesScreenState extends State<SharesScreen> {
 
   void _showDetail(ShareLink s) {
     final url = _session.api.shareUrl(s.id);
-    final active = _active[s.id] ?? true;
+    final active = _active[s.id] ?? !s.disabled;
     showModalBottomSheet(
       context: context,
       showDragHandle: true,
@@ -302,7 +302,7 @@ class _SharesScreenState extends State<SharesScreen> {
                         s.exp == null || s.exp == 0
                             ? 'Never'
                             : formatDateTime(s.exp!)),
-                    _detailStat('Created', timeAgo(s.createdAt)),
+                    _detailStat('Created', formatDate(s.createdAt)),
                     _detailStat(
                         'Protection', s.hasPw ? 'Password' : 'Public'),
                   ],
@@ -370,104 +370,240 @@ class _SharesScreenState extends State<SharesScreen> {
     final night = theme.brightness == Brightness.dark;
     if (_loading) return const LoadingView(label: 'Loading shared links…');
     if (_error != null) return ErrorView(message: _error!, onRetry: _load);
-    if (_shares.isEmpty) {
-      return Center(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const EmptyView(
-              icon: Icons.link_outlined, message: 'No share links yet.'),
+    final muted = night ? AppColors.nightMuted : AppColors.dayMuted;
+    final line = night ? AppColors.nightLine : AppColors.dayLine;
+    final line2 = night ? AppColors.nightLine2 : const Color(0xFFEDEAE2);
+    return RefreshIndicator(
+      onRefresh: _load,
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(12, 14, 12, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                const Text('Shared links',
+                    style:
+                        TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+                const Spacer(),
+                Text(
+                    '${_shares.length} link${_shares.length == 1 ? '' : 's'}',
+                    style: TextStyle(fontSize: 13, color: muted)),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Card(
+              margin: EdgeInsets.zero,
+              child: _shares.isEmpty
+                  ? _emptyState(night)
+                  : Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Padding(
+                          padding:
+                              const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                          child: Text('FILE',
+                              style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  letterSpacing: 0.04 * 12,
+                                  color: muted)),
+                        ),
+                        Divider(height: 1, color: line),
+                        for (var i = 0; i < _shares.length; i++) ...[
+                          _shareRow(theme, night, _shares[i]),
+                          if (i < _shares.length - 1)
+                            Divider(
+                                height: 1,
+                                indent: 16,
+                                endIndent: 16,
+                                color: line2),
+                        ],
+                      ],
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _emptyState(bool night) {
+    final muted = night ? AppColors.nightMuted : AppColors.dayMuted;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.share, size: 44, color: muted),
           const SizedBox(height: 12),
+          const Text('No shared links',
+              style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 6),
+          Text(
+            'Right-click a file → "Share link" to create a public link (optional password).',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 13, color: muted),
+          ),
+          const SizedBox(height: 14),
           ElevatedButton.icon(
             onPressed: _pickFile,
             icon: const Icon(Icons.add),
             label: const Text('Create share link'),
           ),
-        ]),
-      );
-    }
-    return RefreshIndicator(
-      onRefresh: _load,
-      child: ListView.builder(
-        padding: const EdgeInsets.all(12),
-        itemCount: _shares.length,
-        itemBuilder: (c, i) => _shareCard(theme, night, _shares[i]),
+        ],
       ),
     );
   }
 
-  Widget _shareCard(ThemeData theme, bool night, ShareLink s) {
-    final active = _active[s.id] ?? true;
-    return Card(
-      margin: const EdgeInsets.only(bottom: 8),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(12),
-        onTap: () => _showDetail(s),
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Row(
-            children: [
-              FileTypeIcon(
-                  name: s.fileName,
-                  mime: guessMime(s.fileName),
-                  size: 40),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(s.fileName,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                  fontWeight: FontWeight.w700,
-                                  color: active
-                                      ? null
-                                      : (night
-                                          ? AppColors.nightMuted
-                                          : AppColors.dayMuted))),
+  Widget _protPill(bool night, bool hasPw) {
+    if (hasPw) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+        decoration: BoxDecoration(
+          color: night ? AppColors.nightSide2 : const Color(0xFFF4F2ED),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.lock_outline, size: 11),
+            SizedBox(width: 3),
+            Text('Password',
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+          ],
+        ),
+      );
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF7ED),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: const Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.public, size: 11, color: Color(0xFFB45309)),
+          SizedBox(width: 3),
+          Text('Public',
+              style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFFB45309))),
+        ],
+      ),
+    );
+  }
+
+  Widget _shareRow(ThemeData theme, bool night, ShareLink s) {
+    final muted = night ? AppColors.nightMuted : AppColors.dayMuted;
+    final active = _active[s.id] ?? !s.disabled;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final expired = s.exp != null && s.exp! > 0 && s.exp! < now;
+    final full = s.max != null && s.dl >= s.max!;
+    final String? status = s.fileName.isEmpty
+        ? 'File deleted'
+        : !active
+            ? 'Disabled'
+            : expired
+                ? 'Expired'
+                : full
+                    ? 'Limit reached'
+                    : null;
+    final url = (s.url != null && s.url!.isNotEmpty)
+        ? s.url!
+        : _session.api.shareUrl(s.id);
+    return InkWell(
+      onTap: () => _showDetail(s),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Row(
+          children: [
+            FileTypeIcon(
+                name: s.fileName, mime: guessMime(s.fileName), size: 40),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                            s.fileName.isEmpty
+                                ? '(deleted file)'
+                                : s.fileName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontWeight: FontWeight.w700)),
+                      ),
+                      if (s.hasPw)
+                        const Padding(
+                          padding: EdgeInsets.only(left: 4),
+                          child:
+                              Icon(Icons.lock_outline, size: 16),
                         ),
-                        if (s.hasPw)
-                          const Padding(
-                            padding: EdgeInsets.only(left: 4),
-                            child: Icon(Icons.lock_outline, size: 16),
-                          ),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      '${s.dl}${s.max != null ? ' / ${s.max}' : ''} downloads · ${s.exp == null || s.exp == 0 ? 'Never expires' : 'Expires ${formatDateTime(s.exp!)}'}',
-                      style: TextStyle(
-                          fontSize: 12,
-                          color: night
-                              ? AppColors.nightMuted
-                              : AppColors.dayMuted),
-                    ),
-                    Text('Created ${timeAgo(s.createdAt)}',
-                        style: TextStyle(
-                            fontSize: 12,
-                            color: night
-                                ? AppColors.nightMuted
-                                : AppColors.dayMuted)),
-                  ],
-                ),
+                    ],
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    status ?? 'Created ${formatDate(s.createdAt)}',
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: status != null
+                            ? theme.colorScheme.error
+                            : muted),
+                  ),
+                  const SizedBox(height: 4),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 4,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      _protPill(night, s.hasPw),
+                      Text(
+                          '${s.dl}${s.max != null ? ' / ${s.max}' : ''} downloads',
+                          style: TextStyle(fontSize: 12, color: muted)),
+                      Text(
+                          s.exp == null || s.exp == 0
+                              ? 'Never expires'
+                              : 'Expires ${formatDateTime(s.exp!)}',
+                          style: TextStyle(fontSize: 12, color: muted)),
+                    ],
+                  ),
+                ],
               ),
-              if (!active)
-                const Chip(
-                    label: Text('disabled'),
-                    visualDensity: VisualDensity.compact),
-              Switch(
-                value: active,
-                onChanged: (_) => _toggleActive(s),
-              ),
-              IconButton(
-                icon: const Icon(Icons.delete_outline, size: 20),
-                tooltip: 'Delete link',
-                onPressed: () => _delete(s),
-              ),
-            ],
-          ),
+            ),
+            IconButton(
+              tooltip: 'Copy link',
+              icon: const Icon(Icons.copy, size: 18),
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: url));
+                showMsg(context, 'Link copied.');
+              },
+            ),
+            IconButton(
+              tooltip: active ? 'Disable' : 'Enable',
+              icon: Icon(
+                  active ? Icons.toggle_on : Icons.toggle_off,
+                  size: 26,
+                  color: active
+                      ? (night
+                          ? AppColors.brandDark
+                          : AppColors.brandLight)
+                      : muted),
+              onPressed: () => _toggleActive(s),
+            ),
+            IconButton(
+              tooltip: 'Delete link',
+              icon: Icon(Icons.delete_outline,
+                  size: 20, color: theme.colorScheme.error),
+              onPressed: () => _delete(s),
+            ),
+          ],
         ),
       ),
     );

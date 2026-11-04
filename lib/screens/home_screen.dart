@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_svg/flutter_svg.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:provider/provider.dart';
 
 import '../models/models.dart';
 import '../providers/app_state.dart';
 import '../theme/app_theme.dart';
 import '../utils/format.dart';
+import '../utils/images.dart';
 import '../widgets/app_widgets.dart';
 import 'announcements_screen.dart';
 import 'database_screen.dart';
@@ -59,7 +62,7 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: Icons.note_outlined,
             build: () => const NotesScreen()),
         _NavItem(
-            label: 'Support',
+            label: 'Tickets',
             icon: Icons.support_agent_outlined,
             build: () => const SupportScreen()),
         _NavItem(
@@ -189,7 +192,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final handler = <String, VoidCallback?>{
       'My Drive': () => DriveScreen.requestNew?.call(),
       'Notes': () => NotesScreen.requestNew?.call(),
-      'Support': () => SupportScreen.requestNew?.call(),
+      'Tickets': () => SupportScreen.requestNew?.call(),
       'Diary': () => DiaryScreen.requestNew?.call(),
       'Database': () => DatabaseScreen.requestNew?.call(),
       'Group': () => GroupScreen.requestNew?.call(),
@@ -198,6 +201,40 @@ class _HomeScreenState extends State<HomeScreen> {
       'Members': () => MembersScreen.requestNew?.call(),
     }[tab];
     handler?.call();
+  }
+
+  /// Avatar picker — mirrors the Settings screen flow: pick image,
+  /// shrink client-side to 256×256, upload, refresh.
+  Future<void> _changeAvatar(
+      BuildContext context, SessionProvider session) async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.image,
+      allowMultiple: false,
+      withData: false,
+    );
+    if (result == null || result.files.isEmpty) return;
+    final path = result.files.single.path;
+    if (path == null || path.isEmpty) {
+      if (!mounted) return;
+      showMsg(context, 'Could not read the selected image.', error: true);
+      return;
+    }
+    late final String uploadPath;
+    try {
+      uploadPath = (await shrinkForAvatar(path)).path;
+    } catch (_) {
+      if (!mounted) return;
+      showMsg(context, 'Could not process that image.', error: true);
+      return;
+    }
+    if (!mounted) return;
+    final ok = await ProgressDialog.show(context,
+        title: 'Uploading avatar…',
+        task: (_) => session.api.uploadAvatar(localPath: uploadPath));
+    if (!mounted || !ok) return;
+    await guard(context, () => session.refreshDrive());
+    if (!mounted) return;
+    showMsg(context, 'Avatar updated.');
   }
 
   // ---------------- sidebar ----------------
@@ -221,47 +258,51 @@ class _HomeScreenState extends State<HomeScreen> {
 
     Widget navTile(int i, _NavItem item) {
       final active = i == _index;
-      final iconBg = active
+      // Web spec: active = pale-blue pill bg with BLUE text + BLUE icon.
+      final pillBg = active
+          ? (night ? AppColors.nightBrandTint : AppColors.dayBrandTint)
+          : Colors.transparent;
+      final fg = active
           ? brand
-          : (night ? AppColors.nightSide2 : Colors.white);
-      final iconFg = active
-          ? Colors.white
           : (night ? AppColors.nightSideText : AppColors.daySideText);
       return Padding(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
         child: Material(
-          color: active
-              ? brand.withOpacity(0.13)
-              : Colors.transparent,
-          borderRadius: BorderRadius.circular(10),
+          color: pillBg,
+          borderRadius: BorderRadius.circular(11),
           child: InkWell(
-            borderRadius: BorderRadius.circular(10),
+            borderRadius: BorderRadius.circular(11),
             onTap: () {
               setState(() => _index = i);
               if (inDrawer) Navigator.pop(context);
             },
             child: Padding(
               padding:
-                  const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
               child: Row(children: [
                 Container(
-                  width: 32,
-                  height: 32,
+                  width: 31,
+                  height: 31,
                   decoration: BoxDecoration(
-                    color: iconBg,
-                    borderRadius: BorderRadius.circular(9),
+                    color: active
+                        ? Colors.transparent
+                        : (night
+                            ? AppColors.nightSide2
+                            : AppColors.daySoft),
+                    borderRadius: BorderRadius.circular(10),
                   ),
-                  child: Icon(item.icon, size: 18, color: iconFg),
+                  child: Icon(item.icon, size: 14, color: fg),
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(width: 11),
                 Expanded(
                   child: Text(item.label,
                       style: TextStyle(
+                          color: fg,
                           fontWeight:
-                              active ? FontWeight.w700 : FontWeight.w500,
-                          fontSize: 14)),
+                              active ? FontWeight.w600 : FontWeight.w500,
+                          fontSize: 13.5)),
                 ),
-                if (item.label == 'Support' &&
+                if (item.label == 'Tickets' &&
                     (drive?.ticketsUnread ?? 0) > 0)
                   Container(
                     padding: const EdgeInsets.symmetric(
@@ -284,7 +325,7 @@ class _HomeScreenState extends State<HomeScreen> {
     int idxOf(String label) => items.indexWhere((e) => e.label == label);
 
     return Container(
-      width: 264,
+      width: 260,
       color: night ? AppColors.nightSide : AppColors.daySide,
       child: SafeArea(
         child: Column(
@@ -294,14 +335,14 @@ class _HomeScreenState extends State<HomeScreen> {
               padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
               child: Row(children: [
                 Container(
-                  width: 40,
-                  height: 40,
+                  width: 38,
+                  height: 38,
                   decoration: BoxDecoration(
                     color: brand,
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  child: const Icon(Icons.cloud_outlined,
-                      color: Colors.white, size: 24),
+                  padding: const EdgeInsets.all(5),
+                  child: SvgPicture.asset('assets/logo.svg'),
                 ),
                 const SizedBox(width: 12),
                 const Expanded(
@@ -350,7 +391,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   for (final l in ['My Drive', 'Recent', 'Notes'])
                     if (idxOf(l) >= 0) navTile(idxOf(l), items[idxOf(l)]),
                   sectionLabel('TEAM'),
-                  for (final l in ['Support', 'Diary', 'Database', 'Group'])
+                  for (final l in ['Tickets', 'Diary', 'Database', 'Group'])
                     if (idxOf(l) >= 0) navTile(idxOf(l), items[idxOf(l)]),
                   if (session.isAdmin) ...[
                     sectionLabel('MANAGE'),
@@ -405,9 +446,16 @@ class _HomeScreenState extends State<HomeScreen> {
       ThemeProvider theme, bool night, List<_NavItem> items) {
     final wide = MediaQuery.of(context).size.width >= 900;
     final user = session.user!;
+    final muted = night ? AppColors.nightMuted : AppColors.dayMuted;
     return Container(
-      color: night ? AppColors.nightSide : AppColors.daySide,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      height: 68,
+      color: night ? AppColors.nightPanel : Colors.white,
+      decoration: BoxDecoration(
+        border: Border(
+            bottom: BorderSide(
+                color: night ? AppColors.nightLine : AppColors.dayLine)),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Row(
         children: [
           if (!wide)
@@ -418,48 +466,47 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
           Expanded(
-            child: GestureDetector(
-              onTap: _globalSearch,
-              child: Container(
-                height: 40,
-                padding: const EdgeInsets.symmetric(horizontal: 14),
-                decoration: BoxDecoration(
-                  color: night ? AppColors.nightSide2 : Colors.white,
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(
-                      color: night
-                          ? AppColors.nightLine
-                          : AppColors.dayLine),
-                ),
-                child: Row(children: [
-                  Icon(Icons.search,
-                      size: 18,
-                      color: night
-                          ? AppColors.nightMuted
-                          : AppColors.dayMuted),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text('Search files…',
-                        style: TextStyle(
-                            color: night
-                                ? AppColors.nightMuted
-                                : AppColors.dayMuted,
-                            fontSize: 14)),
+            child: LayoutBuilder(
+              builder: (c, constraints) => GestureDetector(
+                onTap: _globalSearch,
+                child: Container(
+                  height: 44,
+                  width: constraints.maxWidth > 560 ? 560 : double.infinity,
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  decoration: BoxDecoration(
+                    color: night
+                        ? AppColors.nightSide2
+                        : AppColors.daySoft,
+                    borderRadius: BorderRadius.circular(12),
                   ),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 7, vertical: 3),
-                    decoration: BoxDecoration(
-                      color: night
-                          ? AppColors.nightHover
-                          : const Color(0xFFEFEDE6),
-                      borderRadius: BorderRadius.circular(6),
+                  child: Row(children: [
+                    Icon(Icons.search, size: 18, color: muted),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text('Search files…',
+                          style: TextStyle(color: muted, fontSize: 14)),
                     ),
-                    child: const Text('Ctrl K',
-                        style:
-                            TextStyle(fontSize: 11, color: Colors.grey)),
-                  ),
-                ]),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 7, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: night
+                            ? AppColors.nightHover
+                            : Colors.white,
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(
+                            color: night
+                                ? AppColors.nightLine
+                                : AppColors.dayLine),
+                      ),
+                      child: Text('Ctrl K',
+                          style: TextStyle(
+                              fontSize: 10.5,
+                              fontWeight: FontWeight.w600,
+                              color: muted)),
+                    ),
+                  ]),
+                ),
               ),
             ),
           ),
@@ -477,7 +524,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           Container(
               width: 1,
-              height: 28,
+              height: 26,
               color: night ? AppColors.nightLine : AppColors.dayLine,
               margin: const EdgeInsets.symmetric(horizontal: 8)),
           _profileChip(context, session, night, user),
@@ -488,50 +535,61 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _profileChip(
       BuildContext context, SessionProvider session, bool night, SessionUser user) {
+    final muted = night ? AppColors.nightMuted : AppColors.dayMuted;
     return PopupMenuButton<String>(
       tooltip: 'Account',
-      offset: const Offset(0, 44),
+      offset: const Offset(0, 48),
       onSelected: (v) async {
-        if (v == 'password') {
-          Navigator.push(
-              context,
-              MaterialPageRoute(
-                  builder: (_) => const SettingsScreen()));
+        if (v == 'avatar') {
+          await _changeAvatar(context, session);
+        } else if (v == 'settings') {
+          if (mounted) {
+            Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const SettingsScreen()));
+          }
         } else if (v == 'logout') {
           final ok = await confirmDialog(context,
-              title: 'Log out',
-              message: 'Log out of Team Drive on this device?',
-              okLabel: 'Log out');
-          if (ok) await session.logout();
+              title: 'Sign out',
+              message: 'Sign out of Team Drive on this device?',
+              okLabel: 'Sign out');
+          if (ok && mounted) await session.logout();
         }
       },
-      itemBuilder: (c) => [
-        if (!user.isAdmin)
-          const PopupMenuItem(
-              value: 'password',
-              child: ListTile(
-                  leading: Icon(Icons.lock_outline),
-                  title: Text('Change password'),
-                  contentPadding: EdgeInsets.zero)),
-        const PopupMenuItem(
+      itemBuilder: (c) => const [
+        PopupMenuItem(
+            value: 'avatar',
+            child: ListTile(
+                leading: Icon(Icons.camera_alt_outlined),
+                title: Text('Profile picture'),
+                contentPadding: EdgeInsets.zero)),
+        PopupMenuItem(
+            value: 'settings',
+            child: ListTile(
+                leading: Icon(Icons.settings_outlined),
+                title: Text('Settings'),
+                contentPadding: EdgeInsets.zero)),
+        PopupMenuItem(
             value: 'logout',
             child: ListTile(
                 leading: Icon(Icons.logout_outlined),
-                title: Text('Log out'),
+                title: Text('Sign out'),
                 contentPadding: EdgeInsets.zero)),
       ],
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        padding: const EdgeInsets.fromLTRB(4, 4, 12, 4),
         decoration: BoxDecoration(
+          color: night ? AppColors.nightSide2 : AppColors.daySoft,
           border: Border.all(
               color: night ? AppColors.nightLine : AppColors.dayLine),
-          borderRadius: BorderRadius.circular(20),
+          borderRadius: BorderRadius.circular(30),
         ),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
           AvatarWidget(
               url: session.drive?.avatars[user.username],
               name: user.username,
-              radius: 14),
+              radius: 18),
           const SizedBox(width: 8),
           Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -541,14 +599,10 @@ class _HomeScreenState extends State<HomeScreen> {
                     style: const TextStyle(
                         fontWeight: FontWeight.w700, fontSize: 13)),
                 Text(user.role,
-                    style: TextStyle(
-                        fontSize: 10,
-                        color: night
-                            ? AppColors.nightMuted
-                            : AppColors.dayMuted)),
+                    style: TextStyle(fontSize: 10.5, color: muted)),
               ]),
           const SizedBox(width: 4),
-          const Icon(Icons.arrow_drop_down, size: 18),
+          Icon(Icons.expand_more, size: 18, color: muted),
         ]),
       ),
     );

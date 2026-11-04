@@ -34,6 +34,37 @@ String timeAgo(int ms) {
   return '${(months / 12).floor()}y ago';
 }
 
+/// Web-parity relative time — mirrors the web app's rel():
+/// "just now", "3 hours ago", "1 week ago", "2 months ago".
+String formatRelative(int ms) {
+  if (ms <= 0) return '—';
+  final d = DateTime.now().difference(DateTime.fromMillisecondsSinceEpoch(ms));
+  if (d.inSeconds < 60) return 'just now';
+  if (d.inMinutes < 60) {
+    final m = d.inMinutes;
+    return m == 1 ? '1 minute ago' : '$m minutes ago';
+  }
+  if (d.inHours < 24) {
+    final h = d.inHours;
+    return h == 1 ? '1 hour ago' : '$h hours ago';
+  }
+  if (d.inDays < 7) {
+    final days = d.inDays;
+    return days == 1 ? '1 day ago' : '$days days ago';
+  }
+  if (d.inDays < 30) {
+    final w = (d.inDays / 7).floor();
+    return w == 1 ? '1 week ago' : '$w weeks ago';
+  }
+  final months = (d.inDays / 30).floor();
+  if (months < 12) return months == 1 ? '1 month ago' : '$months months ago';
+  final years = (months / 12).floor();
+  return years == 1 ? '1 year ago' : '$years years ago';
+}
+
+/// Epoch-millis convenience alias for [formatRelative].
+String formatRelativeMs(int ms) => formatRelative(ms);
+
 /// Mirrors the web app's cleanName(): no slashes/backslashes, no control
 /// chars, trimmed, max 200 chars.
 String cleanName(String name) {
