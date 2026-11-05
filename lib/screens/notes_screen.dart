@@ -118,11 +118,31 @@ class _NotesScreenState extends State<NotesScreen> {
   }
 
   Future<void> _openEditor(Note? note, {bool checklist = false}) async {
-    final changed = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(
-          builder: (_) =>
-              _NoteEditorPage(note: note, startChecklist: checklist)),
-    );
+    final wide = MediaQuery.of(context).size.width >= 700;
+    bool? changed;
+    if (wide) {
+      changed = await showDialog<bool>(
+        context: context,
+        builder: (_) => Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding:
+              const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 640, maxHeight: 700),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(16),
+              child: _NoteEditorPage(note: note, startChecklist: checklist),
+            ),
+          ),
+        ),
+      );
+    } else {
+      changed = await Navigator.of(context).push<bool>(
+        MaterialPageRoute(
+            builder: (_) =>
+                _NoteEditorPage(note: note, startChecklist: checklist)),
+      );
+    }
     if (changed == true && mounted) _load();
   }
 
@@ -1010,6 +1030,37 @@ class _NoteEditorPageState extends State<_NoteEditorPage> {
         foregroundColor: fg,
         elevation: 0,
         actions: [
+          PopupMenuButton<String>(
+            tooltip: 'Background color',
+            icon: const Icon(Icons.palette_outlined),
+            onSelected: (k) => setState(() => _color = k),
+            itemBuilder: (c) => [
+              for (final k in _colorKeys)
+                PopupMenuItem(
+                  value: k,
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 22,
+                        height: 22,
+                        decoration: BoxDecoration(
+                          color: _noteBg(k, theme.brightness),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: theme.dividerColor),
+                        ),
+                        child: k == _color
+                            ? Icon(Icons.check,
+                                size: 14,
+                                color: _noteFg(k, theme.brightness))
+                            : null,
+                      ),
+                      const SizedBox(width: 10),
+                      Text(k == 'default' ? 'Default' : k),
+                    ],
+                  ),
+                ),
+            ],
+          ),
           IconButton(
             tooltip: _pinned ? 'Unpin' : 'Pin',
             icon: Icon(_pinned ? Icons.push_pin : Icons.push_pin_outlined),
@@ -1048,44 +1099,6 @@ class _NoteEditorPageState extends State<_NoteEditorPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Color picker.
-            SizedBox(
-              height: 40,
-              child: ListView.separated(
-                scrollDirection: Axis.horizontal,
-                itemCount: _colorKeys.length,
-                separatorBuilder: (_, __) =>
-                    const SizedBox(width: 8),
-                itemBuilder: (_, i) {
-                  final k = _colorKeys[i];
-                  final c = _noteBg(k, theme.brightness);
-                  final selected = k == _color;
-                  return GestureDetector(
-                    onTap: () => setState(() => _color = k),
-                    child: Container(
-                      width: 32,
-                      height: 32,
-                      decoration: BoxDecoration(
-                        color: c,
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: selected
-                              ? theme.colorScheme.primary
-                              : theme.dividerColor,
-                          width: selected ? 2.5 : 1,
-                        ),
-                      ),
-                      child: selected
-                          ? Icon(Icons.check,
-                              size: 16,
-                              color: _noteFg(k, theme.brightness))
-                          : null,
-                    ),
-                  );
-                },
-              ),
-            ),
-            const SizedBox(height: 12),
             TextField(
               controller: _titleCtrl,
               maxLength: 500,

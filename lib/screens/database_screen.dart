@@ -15,12 +15,12 @@ import '../widgets/app_widgets.dart';
 /// Database / record lists screen — mirrors the web app's Database view.
 ///
 /// - Page header: "Database" + gray "N lists", blue "+ New list" (admin).
-/// - Match check card: pale icon tile, description, input + list-scope
-///   dropdown + blue Check button.
-/// - List tabs: active = light-blue pill + count.
+/// - Match check: slim single-row card — search field + list-scope
+///   dropdown + blue Check button (results show below when present).
+/// - List tabs: name + count pills (active = light-blue).
 /// - Active list card: title, purple permission pills, "N row · updated …",
-///   toolbar (search, Match/duplicate chip, Add row, import/export/edit/delete
-///   icon buttons), data table (Member, columns, Match, Added, actions).
+///   toolbar (search, Match/duplicate chip, Add row, ⋮ overflow menu),
+///   data table (Member, columns, Match, Added, actions).
 class DatabaseScreen extends StatefulWidget {
   const DatabaseScreen({super.key});
 
@@ -570,56 +570,45 @@ class _DatabaseScreenState extends State<DatabaseScreen> {
 
   Widget _buildCheckCard(ThemeData theme, bool night) {
     final brand = night ? AppColors.brandDark : AppColors.brandLight;
-    final muted = night ? AppColors.nightMuted : AppColors.dayMuted;
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
       child: Card(
         margin: EdgeInsets.zero,
         child: Padding(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(12),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Row(
                 children: [
                   Container(
-                    width: 38,
-                    height: 38,
+                    padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
-                      color: brand.withOpacity(0.13),
-                      borderRadius: BorderRadius.circular(11),
+                      color: brand.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(10),
                     ),
-                    child: Icon(Icons.manage_search, color: brand, size: 20),
+                    child: Icon(Icons.manage_search,
+                        color: brand, size: 20),
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text('Match check',
-                            style: TextStyle(
-                                fontSize: 15, fontWeight: FontWeight.w700)),
-                        const SizedBox(height: 2),
-                        Text(
-                          'Token / number / ID likhun — kon list e, kar data r sathe match kore dekhabe (boro/choto hater okkhor, space, - _ . / ignore kore)',
-                          style: TextStyle(fontSize: 12.5, color: muted),
-                        ),
-                      ],
-                    ),
-                  ),
+                  const SizedBox(width: 10),
+                  const Text('Match check',
+                      style: TextStyle(
+                          fontSize: 15, fontWeight: FontWeight.w700)),
                 ],
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 10),
               Row(
                 children: [
                   Expanded(
                     child: TextField(
                       controller: _checkCtrl,
                       maxLength: 300,
-                      decoration: const InputDecoration(
-                        hintText: 'e.g. AB-1234',
+                      decoration: InputDecoration(
+                        hintText: 'Token / number / ID check korun…',
+                        prefixIcon:
+                            Icon(Icons.manage_search, color: brand, size: 20),
                         counterText: '',
-                        contentPadding: EdgeInsets.symmetric(
+                        contentPadding: const EdgeInsets.symmetric(
                             horizontal: 12, vertical: 10),
                       ),
                       onSubmitted: (_) => _runCheck(),
@@ -627,7 +616,7 @@ class _DatabaseScreenState extends State<DatabaseScreen> {
                   ),
                   const SizedBox(width: 8),
                   SizedBox(
-                    width: 168,
+                    width: 150,
                     child: DropdownButtonFormField<String?>(
                       value: _checkScope,
                       decoration: const InputDecoration(
@@ -811,7 +800,6 @@ class _DatabaseScreenState extends State<DatabaseScreen> {
         children: _lists.map((l) {
           final active = l.id == _selId;
           final meta = _meta[l.id];
-          final accKey = meta?.access ?? 'all';
           return InkWell(
             borderRadius: BorderRadius.circular(20),
             onTap: () => _openList(l.id),
@@ -827,9 +815,6 @@ class _DatabaseScreenState extends State<DatabaseScreen> {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(_accIcons[accKey] ?? Icons.visibility_outlined,
-                      size: 14, color: active ? brand : muted),
-                  const SizedBox(width: 6),
                   Text(l.name,
                       style: TextStyle(
                           fontSize: 13,
@@ -918,7 +903,8 @@ class _DatabaseScreenState extends State<DatabaseScreen> {
             Divider(
                 height: 1,
                 color: night ? AppColors.nightLine : AppColors.dayLine),
-            Expanded(
+            SizedBox(
+              height: 400,
               child: _loadingRows
                   ? const LoadingView(label: 'Loading rows…')
                   : _dataTable(theme, night, list, rows),
@@ -1103,29 +1089,68 @@ class _DatabaseScreenState extends State<DatabaseScreen> {
                 textStyle: const TextStyle(fontSize: 13),
               ),
             ),
-          if (_isAdmin) ...[
-            IconButton(
-              tooltip: 'Import CSV',
-              icon: const Icon(Icons.file_upload_outlined, size: 20),
-              onPressed: () => _importRows(list),
+          if (_isAdmin)
+            PopupMenuButton<String>(
+              tooltip: 'List options',
+              icon: const Icon(Icons.more_vert, size: 20),
+              onSelected: (v) {
+                switch (v) {
+                  case 'import':
+                    _importRows(list);
+                  case 'export':
+                    _exportCsv(list, _rows.values.toList());
+                  case 'edit':
+                    _showListEditor(list: list);
+                  case 'delete':
+                    _deleteList(list);
+                }
+              },
+              itemBuilder: (ctx) => [
+                const PopupMenuItem(
+                  value: 'import',
+                  child: Row(
+                    children: [
+                      Icon(Icons.file_upload_outlined, size: 18),
+                      SizedBox(width: 10),
+                      Text('Import CSV'),
+                    ],
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'export',
+                  child: Row(
+                    children: [
+                      Icon(Icons.file_download_outlined, size: 18),
+                      SizedBox(width: 10),
+                      Text('Export CSV'),
+                    ],
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'edit',
+                  child: Row(
+                    children: [
+                      Icon(Icons.edit_outlined, size: 18),
+                      SizedBox(width: 10),
+                      Text('Edit list'),
+                    ],
+                  ),
+                ),
+                PopupMenuItem(
+                  value: 'delete',
+                  child: Row(
+                    children: [
+                      Icon(Icons.delete_outline,
+                          size: 18, color: theme.colorScheme.error),
+                      const SizedBox(width: 10),
+                      Text('Delete list',
+                          style:
+                              TextStyle(color: theme.colorScheme.error)),
+                    ],
+                  ),
+                ),
+              ],
             ),
-            IconButton(
-              tooltip: 'Export',
-              icon: const Icon(Icons.file_download_outlined, size: 20),
-              onPressed: () => _exportCsv(list, _rows.values.toList()),
-            ),
-            IconButton(
-              tooltip: 'Edit list',
-              icon: const Icon(Icons.edit_outlined, size: 20),
-              onPressed: () => _showListEditor(list: list),
-            ),
-            IconButton(
-              tooltip: 'Delete list',
-              icon: Icon(Icons.delete_outline,
-                  size: 20, color: theme.colorScheme.error),
-              onPressed: () => _deleteList(list),
-            ),
-          ],
         ],
       ),
     );

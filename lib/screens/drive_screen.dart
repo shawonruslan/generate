@@ -892,11 +892,12 @@ class _DriveScreenState extends State<DriveScreen> {
 
   Widget _gridView(
       DriveData drive, List<DriveFolder> folders, List<DriveFile> files) {
-    const delegate = SliverGridDelegateWithMaxCrossAxisExtent(
-      maxCrossAxisExtent: 170,
-      mainAxisSpacing: 10,
-      crossAxisSpacing: 10,
-      childAspectRatio: 0.78,
+    final wide = MediaQuery.of(context).size.width >= 900;
+    final delegate = SliverGridDelegateWithMaxCrossAxisExtent(
+      maxCrossAxisExtent: wide ? 210 : 170,
+      mainAxisSpacing: 12,
+      crossAxisSpacing: 12,
+      childAspectRatio: 0.82,
     );
     Widget headerSliver(String title, double topPad) => SliverToBoxAdapter(
           child: Padding(
@@ -1240,7 +1241,7 @@ class _DriveScreenState extends State<DriveScreen> {
                   Expanded(
                     child: Padding(
                       padding:
-                          const EdgeInsets.fromLTRB(12, 10, 34, 10),
+                          const EdgeInsets.fromLTRB(12, 10, 12, 10),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         mainAxisSize: MainAxisSize.min,
@@ -1270,25 +1271,11 @@ class _DriveScreenState extends State<DriveScreen> {
                               style: TextStyle(
                                   fontSize: 11,
                                   color: theme.hintColor)),
-                          if (f.ver > 1 ||
-                              f.vc > 0 ||
-                              f.isLocked) ...[
+                          if (f.isLocked) ...[
                             const SizedBox(height: 4),
-                            Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                if (f.isLocked)
-                                  Icon(Icons.lock,
-                                      size: 13,
-                                      color:
-                                          theme.colorScheme.error),
-                                if (f.isLocked &&
-                                    (f.ver > 1 || f.vc > 0))
-                                  const SizedBox(width: 6),
-                                if (f.ver > 1 || f.vc > 0)
-                                  _verBadge(f.ver),
-                              ],
-                            ),
+                            Icon(Icons.lock,
+                                size: 13,
+                                color: theme.colorScheme.error),
                           ],
                         ],
                       ),
@@ -1311,6 +1298,12 @@ class _DriveScreenState extends State<DriveScreen> {
                   onPressed: () => _fileMenu(f),
                 ),
               ),
+              if (f.ver > 1 || f.vc > 0)
+                Positioned(
+                  top: 8,
+                  left: 8,
+                  child: _verBadge(f.ver),
+                ),
             ],
           ),
         ),
