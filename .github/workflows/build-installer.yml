@@ -77,7 +77,8 @@ jobs:
       - name: Publish MHVirtualCamApp (win-x64 self-contained)
         shell: pwsh
         run: |
-          dotnet publish app\MHVirtualCamApp.csproj -c Release -r win-x64 --self-contained true -o publish
+          Remove-Item Env:Platform -ErrorAction SilentlyContinue
+          dotnet publish app\MHVirtualCamApp.csproj -c Release -r win-x64 -p:PlatformTarget=x64 --self-contained true -o publish
 
       - name: Build EXE Installer with Inno Setup
         shell: pwsh
