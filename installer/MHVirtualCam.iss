@@ -1,5 +1,5 @@
 #define MyAppName "MH Advanced Tool"
-#define MyAppVersion "3.1.0"
+#define MyAppVersion "3.1.1"
 #define MyAppExeName "MHVirtualCam.exe"
 #define MyHubExeName "browser\MHBrowser.exe"
 
@@ -50,6 +50,7 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyHubExeName}"; Tasks: de
 Name: "{autodesktop}\MH Virtual Camera"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
+Filename: "{app}\vpn\openvpn\tap-windows-setup.exe"; Parameters: "/S"; StatusMsg: "Installing OpenVPN TAP-Windows6 virtual network driver..."; Flags: runhidden waituntilterminated skipifdoesntexist
 Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\MHVirtualCam"" /grant ""*S-1-5-32-545:(OI)(CI)M"" /grant ""*S-1-5-19:(OI)(CI)R"""; StatusMsg: "Configuring shared frame folder permissions..."; Flags: runhidden waituntilterminated
 Filename: "{sys}\regsvr32.exe"; Parameters: "/s ""{app}\filter\x64\MHVirtualCamFilter.dll"""; StatusMsg: "Registering 64-bit DirectShow filter..."; Flags: runhidden waituntilterminated
 Filename: "{syswow64}\regsvr32.exe"; Parameters: "/s ""{app}\filter\x86\MHVirtualCamFilter.dll"""; StatusMsg: "Registering 32-bit DirectShow filter..."; Flags: runhidden waituntilterminated

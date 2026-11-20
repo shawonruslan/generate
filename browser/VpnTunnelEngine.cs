@@ -9,7 +9,7 @@ using System.Text.RegularExpressions;
 namespace MHBrowser;
 
 /// <summary>
-/// Per-profile local SOCKS5 proxy bound strictly to a specific Windows Wintun interface
+/// Per-profile local SOCKS5 proxy bound strictly to a specific Windows TAP/Wintun interface
 /// via IP_UNICAST_IF + local tunnel IP bind, including tunnel-routed DNS resolution.
 /// Keeps the host PC's main internet & IP completely untouched.
 /// </summary>
@@ -57,19 +57,17 @@ public sealed class LocalInterfaceSocks5Proxy : IDisposable
                 var stream = client.GetStream();
                 byte[] header = new byte[2];
                 if (!await ReadExactAsync(stream, header, 0, 2, ct)) return;
-                if (header[0] != 0x05) return; // SOCKS5 only
+                if (header[0] != 0x05) return;
 
                 int nMethods = header[1];
                 byte[] methods = new byte[nMethods];
                 if (!await ReadExactAsync(stream, methods, 0, nMethods, ct)) return;
 
-                // Reply: No authentication required
                 await stream.WriteAsync(new byte[] { 0x05, 0x00 }, ct);
 
-                // Read CONNECT request header: VER, CMD, RSV, ATYP
                 byte[] req = new byte[4];
                 if (!await ReadExactAsync(stream, req, 0, 4, ct)) return;
-                if (req[0] != 0x05 || req[1] != 0x01) // only CONNECT
+                if (req[0] != 0x05 || req[1] != 0x01)
                 {
                     await stream.WriteAsync(new byte[] { 0x05, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0 }, ct);
                     return;
@@ -77,13 +75,13 @@ public sealed class LocalInterfaceSocks5Proxy : IDisposable
 
                 IPAddress? targetIp = null;
                 byte atyp = req[3];
-                if (atyp == 0x01) // IPv4
+                if (atyp == 0x01)
                 {
                     byte[] addr = new byte[4];
                     if (!await ReadExactAsync(stream, addr, 0, 4, ct)) return;
                     targetIp = new IPAddress(addr);
                 }
-                else if (atyp == 0x03) // Domain name
+                else if (atyp == 0x03)
                 {
                     byte[] lenBuf = new byte[1];
                     if (!await ReadExactAsync(stream, lenBuf, 0, 1, ct)) return;
@@ -92,7 +90,7 @@ public sealed class LocalInterfaceSocks5Proxy : IDisposable
                     string host = Encoding.ASCII.GetString(hostBuf);
                     targetIp = await ResolveViaTunnelAsync(host, ct);
                 }
-                else if (atyp == 0x04) // IPv6 -> unsupported on IPv4-only tun
+                else if (atyp == 0x04)
                 {
                     byte[] addr = new byte[16];
                     if (!await ReadExactAsync(stream, addr, 0, 16, ct)) return;
@@ -112,7 +110,6 @@ public sealed class LocalInterfaceSocks5Proxy : IDisposable
 
                 using var remoteSock = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
                 remoteSock.NoDelay = true;
-                // Force outbound packets strictly out the Wintun VPN adapter!
                 remoteSock.SetSocketOption(SocketOptionLevel.IP, IpUnicastIf, IPAddress.HostToNetworkOrder(_ifIndex));
                 remoteSock.Bind(new IPEndPoint(_localTunIp, 0));
 
@@ -120,7 +117,6 @@ public sealed class LocalInterfaceSocks5Proxy : IDisposable
                 connCts.CancelAfter(TimeSpan.FromSeconds(15));
                 await remoteSock.ConnectAsync(new IPEndPoint(targetIp, targetPort), connCts.Token);
 
-                // Reply: Succeeded
                 await stream.WriteAsync(new byte[] { 0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0 }, ct);
 
                 using var remoteStream = new NetworkStream(remoteSock, ownsSocket: false);
@@ -137,14 +133,12 @@ public sealed class LocalInterfaceSocks5Proxy : IDisposable
         if (IPAddress.TryParse(host, out var parsed) && parsed.AddressFamily == AddressFamily.InterNetwork)
             return parsed;
 
-        // Try direct UDP DNS query through the VPN tunnel (1.1.1.1 then 8.8.8.8) so DNS never leaks
         foreach (var dnsServer in new[] { "1.1.1.1", "8.8.8.8" })
         {
             var ip = await QueryDnsARecordViaTunnelAsync(host, IPAddress.Parse(dnsServer), ct);
             if (ip is not null) return ip;
         }
 
-        // Fallback to system resolver if VPN blocks UDP/53
         try
         {
             var addrs = await Dns.GetHostAddressesAsync(host, ct);
@@ -165,7 +159,7 @@ public sealed class LocalInterfaceSocks5Proxy : IDisposable
             ushort txId = (ushort)Random.Shared.Next(1, 65535);
             ms.WriteByte((byte)(txId >> 8));
             ms.WriteByte((byte)(txId & 0xFF));
-            ms.Write(new byte[] { 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }); // RD=1, QDCOUNT=1
+            ms.Write(new byte[] { 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 });
             foreach (var label in domain.Split('.', StringSplitOptions.RemoveEmptyEntries))
             {
                 var bytes = Encoding.ASCII.GetBytes(label);
@@ -173,7 +167,7 @@ public sealed class LocalInterfaceSocks5Proxy : IDisposable
                 ms.Write(bytes);
             }
             ms.WriteByte(0x00);
-            ms.Write(new byte[] { 0x00, 0x01, 0x00, 0x01 }); // QTYPE=A, QCLASS=IN
+            ms.Write(new byte[] { 0x00, 0x01, 0x00, 0x01 });
 
             var query = ms.ToArray();
             using var dnsCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -188,7 +182,6 @@ public sealed class LocalInterfaceSocks5Proxy : IDisposable
             int anCount = (resp[6] << 8) | resp[7];
             if (anCount == 0) return null;
 
-            // Skip question section
             int pos = 12;
             while (pos < len && resp[pos] != 0)
             {
@@ -196,7 +189,7 @@ public sealed class LocalInterfaceSocks5Proxy : IDisposable
                 pos += resp[pos] + 1;
             }
             if (pos < len && resp[pos] == 0) pos++;
-            pos += 4; // QTYPE + QCLASS
+            pos += 4;
 
             for (int i = 0; i < anCount && pos + 12 <= len; i++)
             {
@@ -240,17 +233,18 @@ public sealed class LocalInterfaceSocks5Proxy : IDisposable
 }
 
 /// <summary>
-/// Manages an isolated, silent, per-profile VPN tunnel (OpenVPN or WireGuard) exposed strictly
-/// as a local SOCKS5 proxy on 127.0.0.1:&lt;port&gt;. Zero CMD windows, zero PC-wide IP hijacking.
+/// Manages an isolated, silent, per-profile VPN tunnel (OpenVPN via TAP-Windows6 or WireGuard via wireproxy)
+/// exposed strictly as a local SOCKS5 proxy on 127.0.0.1:&lt;port&gt;. Zero CMD windows, zero PC-wide IP hijacking.
 /// </summary>
 public sealed class ProfileVpnSession : IDisposable
 {
     private Process? _proc;
     private LocalInterfaceSocks5Proxy? _socksProxy;
     private string _tempConfigPath = "";
+    private string _createdAdapterName = "";
+    private string _tapCtlPath = "";
 
     public int LocalSocksPort { get; private set; }
-    public string LastLogLine { get; private set; } = "";
 
     private static string VpnWorkDir => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MHAdvancedTool", "vpn");
@@ -284,6 +278,7 @@ public sealed class ProfileVpnSession : IDisposable
             $"WGConfig = {copiedWg}\r\n\r\n[Socks5]\r\nBindAddress = 127.0.0.1:{port}\r\n");
 
         onStatus?.Invoke($"Starting isolated WireGuard ({Path.GetFileName(confPath)})...");
+        var logs = new List<string>();
         _proc = new Process
         {
             StartInfo = new ProcessStartInfo
@@ -297,16 +292,20 @@ public sealed class ProfileVpnSession : IDisposable
                 RedirectStandardError = true
             }
         };
+        _proc.OutputDataReceived += (_, e) => { if (!string.IsNullOrWhiteSpace(e.Data)) lock (logs) logs.Add(e.Data); };
+        _proc.ErrorDataReceived += (_, e) => { if (!string.IsNullOrWhiteSpace(e.Data)) lock (logs) logs.Add(e.Data); };
         _proc.Start();
         _proc.BeginOutputReadLine();
         _proc.BeginErrorReadLine();
 
-        // Wait up to 8s for local SOCKS5 port to start listening
         var sw = Stopwatch.StartNew();
         while (sw.ElapsedMilliseconds < 8000 && !ct.IsCancellationRequested)
         {
             if (_proc.HasExited)
-                return (false, 0, "WireGuard userspace proxy exited early. Check your .conf file.");
+            {
+                string tail = string.Join("\n", logs.TakeLast(6));
+                return (false, 0, $"WireGuard exited early:\n{tail}");
+            }
             try
             {
                 using var probe = new TcpClient();
@@ -326,7 +325,30 @@ public sealed class ProfileVpnSession : IDisposable
         if (ovpnExe is null)
             return (false, 0, "openvpn.exe not found in app vpn/openvpn folder.");
 
-        // 1) Sanitize .ovpn so it NEVER hijacks the PC's main internet or DNS, and supports legacy CBC + modern GCM ciphers
+        string ovpnDir = Path.GetDirectoryName(ovpnExe) ?? VpnWorkDir;
+        _tapCtlPath = Path.Combine(ovpnDir, "tapctl.exe");
+
+        // 1) Ensure a dedicated TAP-Windows6 adapter exists for this profile (created silently via tapctl.exe)
+        string adapterNode = $"MHVPN_{profileId[..Math.Min(8, profileId.Length)]}";
+        bool createdDedicatedAdapter = false;
+        if (File.Exists(_tapCtlPath))
+        {
+            onStatus?.Invoke("Preparing isolated TAP tunnel adapter...");
+            // Clean any stale leftover adapter with the same name first
+            await RunHiddenAsync(_tapCtlPath, $"delete \"{adapterNode}\"", ovpnDir);
+            var (okTap, _) = await RunHiddenAsync(_tapCtlPath, $"create --name \"{adapterNode}\" --hwid root\\tap0901", ovpnDir);
+            if (!okTap)
+                (okTap, _) = await RunHiddenAsync(_tapCtlPath, $"create --name \"{adapterNode}\"", ovpnDir);
+
+            if (okTap)
+            {
+                createdDedicatedAdapter = true;
+                _createdAdapterName = adapterNode;
+                await Task.Delay(600, ct);
+            }
+        }
+
+        // 2) Sanitize .ovpn so it NEVER hijacks the PC's main internet or DNS, and works with legacy CBC + modern GCM
         var lines = File.ReadAllLines(ovpnPath);
         var sb = new StringBuilder();
         bool hasDataCiphers = false;
@@ -335,9 +357,11 @@ public sealed class ProfileVpnSession : IDisposable
             string trimmed = raw.Trim();
             if (trimmed.StartsWith("redirect-gateway", StringComparison.OrdinalIgnoreCase) ||
                 trimmed.StartsWith("block-outside-dns", StringComparison.OrdinalIgnoreCase) ||
-                trimmed.StartsWith("daemon", StringComparison.OrdinalIgnoreCase))
+                trimmed.StartsWith("daemon", StringComparison.OrdinalIgnoreCase) ||
+                trimmed.StartsWith("windows-driver", StringComparison.OrdinalIgnoreCase))
                 continue;
-            if (trimmed.StartsWith("data-ciphers", StringComparison.OrdinalIgnoreCase))
+            if (trimmed.StartsWith("data-ciphers", StringComparison.OrdinalIgnoreCase) &&
+                !trimmed.StartsWith("data-ciphers-fallback", StringComparison.OrdinalIgnoreCase))
             {
                 hasDataCiphers = true;
                 sb.AppendLine("data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305:AES-128-CBC:AES-256-CBC:BF-CBC");
@@ -352,33 +376,31 @@ public sealed class ProfileVpnSession : IDisposable
         _tempConfigPath = Path.Combine(VpnWorkDir, $"ovpn_{profileId}.ovpn");
         File.WriteAllText(_tempConfigPath, sb.ToString());
 
-        // Snapshot existing NICs so we can pinpoint the newly created Wintun adapter for this profile
-        var beforeIds = NetworkInterface.GetAllNetworkInterfaces().Select(n => n.Id).ToHashSet();
-        string adapterNode = $"MHVPN_{profileId[..Math.Min(8, profileId.Length)]}";
-
         onStatus?.Invoke($"Connecting OpenVPN ({Path.GetFileName(ovpnPath)}) silently...");
 
         var connectedTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var logTail = new Queue<string>(14);
         string? detectedIpFromLog = null;
-        string lastErr = "";
 
+        string devNodeArg = createdDedicatedAdapter ? $"--dev-node \"{adapterNode}\" " : "";
         string args =
-            $"--windows-driver wintun --dev tun --dev-node \"{adapterNode}\" " +
+            $"--windows-driver tap-windows6 --dev tun {devNodeArg}" +
             $"--config \"{_tempConfigPath}\" " +
             "--pull-filter ignore \"redirect-gateway\" " +
             "--pull-filter ignore \"route 0.0.0.0\" " +
             "--pull-filter ignore \"route-ipv6\" " +
             "--pull-filter ignore \"dhcp-option DNS\" " +
             "--route-metric 9999 --route 0.0.0.0 0.0.0.0 vpn_gateway 9999 " +
-            "--connect-retry 2 --connect-retry-max 3 --verb 3";
+            "--verb 3";
 
         _proc = new Process
         {
+            EnableRaisingEvents = true,
             StartInfo = new ProcessStartInfo
             {
                 FileName = ovpnExe,
                 Arguments = args,
-                WorkingDirectory = Path.GetDirectoryName(ovpnExe) ?? VpnWorkDir,
+                WorkingDirectory = ovpnDir,
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,
@@ -389,25 +411,18 @@ public sealed class ProfileVpnSession : IDisposable
         void HandleLine(string? line)
         {
             if (string.IsNullOrWhiteSpace(line)) return;
-            LastLogLine = line;
+            lock (logTail)
+            {
+                if (logTail.Count >= 12) logTail.Dequeue();
+                logTail.Enqueue(line);
+            }
             if (line.Contains("Peer Connection Initiated", StringComparison.OrdinalIgnoreCase))
                 onStatus?.Invoke("OpenVPN: TLS handshake OK, negotiating tunnel...");
             else if (line.Contains("PUSH_REPLY", StringComparison.OrdinalIgnoreCase))
-                onStatus?.Invoke("OpenVPN: Server accepted, creating isolated tunnel...");
-            else if (line.Contains("AUTH_FAILED", StringComparison.OrdinalIgnoreCase))
-            {
-                lastErr = "OpenVPN authentication failed (check username/password or expired .ovpn).";
-                connectedTcs.TrySetResult(false);
-            }
-            else if (line.Contains("Exiting due to fatal error", StringComparison.OrdinalIgnoreCase))
-            {
-                lastErr = $"OpenVPN fatal error: {line}";
-                connectedTcs.TrySetResult(false);
-            }
+                onStatus?.Invoke("OpenVPN: Server accepted, configuring isolated tunnel...");
 
-            // Capture assigned Wintun IPv4 address from OpenVPN log (e.g. "Set IPv4 ... 10.211.1.5" or "ifconfig 10.x.x.x")
             if (line.Contains("Notified TAP", StringComparison.OrdinalIgnoreCase) ||
-                line.Contains("Wintun", StringComparison.OrdinalIgnoreCase) ||
+                line.Contains("TAP-WIN", StringComparison.OrdinalIgnoreCase) ||
                 line.Contains("ifconfig", StringComparison.OrdinalIgnoreCase) ||
                 line.Contains("IP/Netmask", StringComparison.OrdinalIgnoreCase))
             {
@@ -417,34 +432,39 @@ public sealed class ProfileVpnSession : IDisposable
 
             if (line.Contains("Initialization Sequence Completed", StringComparison.OrdinalIgnoreCase))
                 connectedTcs.TrySetResult(true);
+            else if (line.Contains("AUTH_FAILED", StringComparison.OrdinalIgnoreCase) ||
+                     line.Contains("Exiting due to fatal error", StringComparison.OrdinalIgnoreCase))
+                connectedTcs.TrySetResult(false);
         }
 
         _proc.OutputDataReceived += (_, e) => HandleLine(e.Data);
         _proc.ErrorDataReceived += (_, e) => HandleLine(e.Data);
+        _proc.Exited += (_, _) => connectedTcs.TrySetResult(false);
+
         _proc.Start();
         _proc.BeginOutputReadLine();
         _proc.BeginErrorReadLine();
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(TimeSpan.FromSeconds(25));
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(28));
         using var reg = timeoutCts.Token.Register(() => connectedTcs.TrySetResult(false));
 
         bool connected = await connectedTcs.Task;
         if (!connected)
         {
+            string recentLogs;
+            lock (logTail) recentLogs = string.Join("\n", logTail);
             Dispose();
-            string reason = !string.IsNullOrEmpty(lastErr)
-                ? lastErr
-                : "OpenVPN server did not respond in 25s (free VPNGate server may be offline or UDP blocked). Try another .ovpn file.";
-            return (false, 0, reason);
+            return (false, 0,
+                $"OpenVPN could not connect.\n\nLast OpenVPN output:\n{(string.IsNullOrWhiteSpace(recentLogs) ? "(no output)" : recentLogs)}");
         }
 
-        // Wait briefly for Windows to finish assigning IPv4 to the Wintun interface
+        // Wait briefly for Windows IP stack to finish binding IPv4 on the TAP adapter
         IPAddress? tunIp = null;
         int ifIndex = -1;
-        for (int attempt = 0; attempt < 16; attempt++)
+        for (int attempt = 0; attempt < 20; attempt++)
         {
-            (tunIp, ifIndex) = FindTunnelInterface(adapterNode, beforeIds, detectedIpFromLog);
+            (tunIp, ifIndex) = FindTunnelInterface(createdDedicatedAdapter ? adapterNode : "", detectedIpFromLog);
             if (tunIp is not null && ifIndex > 0) break;
             await Task.Delay(250, ct);
         }
@@ -452,7 +472,7 @@ public sealed class ProfileVpnSession : IDisposable
         if (tunIp is null || ifIndex <= 0)
         {
             Dispose();
-            return (false, 0, "OpenVPN connected, but could not locate Wintun adapter IP.");
+            return (false, 0, "OpenVPN connected, but could not locate TAP adapter IPv4 address.");
         }
 
         _socksProxy = new LocalInterfaceSocks5Proxy(tunIp, ifIndex);
@@ -460,27 +480,23 @@ public sealed class ProfileVpnSession : IDisposable
         return (true, LocalSocksPort, $"OpenVPN isolated ({tunIp}) -> 127.0.0.1:{LocalSocksPort}");
     }
 
-    private static (IPAddress? Ip, int IfIndex) FindTunnelInterface(
-        string adapterNode, HashSet<string> beforeIds, string? preferredIp)
+    private static (IPAddress? Ip, int IfIndex) FindTunnelInterface(string adapterNode, string? preferredIp)
     {
-        var nics = NetworkInterface.GetAllNetworkInterfaces();
-
-        // Priority 1: Exact adapter name match
-        // Priority 2: Newly appeared Wintun adapter
-        // Priority 3: Any Wintun adapter matching preferredIp
-        var ordered = nics
-            .OrderByDescending(n => n.Name.Equals(adapterNode, StringComparison.OrdinalIgnoreCase))
-            .ThenByDescending(n => !beforeIds.Contains(n.Id))
-            .ThenByDescending(n => n.Description.Contains("Wintun", StringComparison.OrdinalIgnoreCase))
+        var nics = NetworkInterface.GetAllNetworkInterfaces()
+            .Where(n => n.OperationalStatus == OperationalStatus.Up)
+            .OrderByDescending(n => !string.IsNullOrEmpty(adapterNode) && n.Name.Equals(adapterNode, StringComparison.OrdinalIgnoreCase))
+            .ThenByDescending(n => n.Description.Contains("TAP-Windows", StringComparison.OrdinalIgnoreCase) ||
+                                   n.Description.Contains("Wintun", StringComparison.OrdinalIgnoreCase))
             .ToList();
 
-        foreach (var nic in ordered)
+        foreach (var nic in nics)
         {
             bool looksLikeOurs =
-                nic.Name.Equals(adapterNode, StringComparison.OrdinalIgnoreCase) ||
-                (!beforeIds.Contains(nic.Id) && nic.Description.Contains("Wintun", StringComparison.OrdinalIgnoreCase)) ||
+                (!string.IsNullOrEmpty(adapterNode) && nic.Name.Equals(adapterNode, StringComparison.OrdinalIgnoreCase)) ||
                 (!string.IsNullOrEmpty(preferredIp) && nic.GetIPProperties().UnicastAddresses
-                    .Any(u => u.Address.ToString() == preferredIp));
+                    .Any(u => u.Address.ToString() == preferredIp)) ||
+                nic.Description.Contains("TAP-Windows", StringComparison.OrdinalIgnoreCase) ||
+                nic.Description.Contains("Wintun", StringComparison.OrdinalIgnoreCase);
 
             if (!looksLikeOurs) continue;
 
@@ -494,6 +510,32 @@ public sealed class ProfileVpnSession : IDisposable
                 return (unicast.Address, ipv4Props.Index);
         }
         return (null, -1);
+    }
+
+    private static async Task<(bool Ok, string Output)> RunHiddenAsync(string fileName, string args, string workDir)
+    {
+        try
+        {
+            using var p = new Process
+            {
+                StartInfo = new ProcessStartInfo
+                {
+                    FileName = fileName,
+                    Arguments = args,
+                    WorkingDirectory = workDir,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                }
+            };
+            p.Start();
+            string stdout = await p.StandardOutput.ReadToEndAsync();
+            string stderr = await p.StandardError.ReadToEndAsync();
+            await p.WaitForExitAsync();
+            return (p.ExitCode == 0, stdout + "\n" + stderr);
+        }
+        catch (Exception ex) { return (false, ex.Message); }
     }
 
     private static int FindFreeTcpPort()
@@ -517,5 +559,13 @@ public sealed class ProfileVpnSession : IDisposable
         catch { }
         try { _proc?.Dispose(); } catch { }
         _proc = null;
+
+        if (!string.IsNullOrEmpty(_createdAdapterName) && File.Exists(_tapCtlPath))
+        {
+            var name = _createdAdapterName;
+            var ctl = _tapCtlPath;
+            _createdAdapterName = "";
+            _ = Task.Run(() => RunHiddenAsync(ctl, $"delete \"{name}\"", Path.GetDirectoryName(ctl) ?? VpnWorkDir));
+        }
     }
 }

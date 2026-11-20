@@ -91,25 +91,23 @@ jobs:
           dotnet publish browser\MHBrowser.csproj -c Release -r win-x64 -p:PlatformTarget=x64 --self-contained true -o publish_browser
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Bundle Portable OpenVPN, Wintun & Userspace WireGuard (wireproxy)
+      - name: Bundle Portable OpenVPN, TAP-Windows6 Driver & Userspace WireGuard (wireproxy)
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "vpn\openvpn", "vpn\wireguard", "C:\vpn-tmp\ovpn", "C:\vpn-tmp\wg", "C:\vpn-tmp\wp" | Out-Null
 
-          # 1) Official OpenVPN 2.6.17 x64 binaries + wintun.dll
+          # 1) Official OpenVPN 2.6.17 x64 binaries (openvpn.exe + tapctl.exe + OpenSSL DLLs)
           Invoke-WebRequest -Uri "https://swupdate.openvpn.org/community/releases/OpenVPN-2.6.17-I001-amd64.msi" -OutFile "C:\vpn-tmp\openvpn.msi"
           Start-Process msiexec.exe -ArgumentList "/a C:\vpn-tmp\openvpn.msi /qn TARGETDIR=C:\vpn-tmp\ovpn" -Wait
           $ovpnBin = Get-ChildItem -Path "C:\vpn-tmp\ovpn" -Recurse -Filter "openvpn.exe" | Select-Object -First 1
           if ($ovpnBin) {
             Copy-Item "$($ovpnBin.DirectoryName)\*" "vpn\openvpn\" -Recurse -Force
           }
-          if (-not (Test-Path "vpn\openvpn\wintun.dll")) {
-            Invoke-WebRequest -Uri "https://www.wintun.net/builds/wintun-0.14.1.zip" -OutFile "C:\vpn-tmp\wintun.zip"
-            Expand-Archive -Path "C:\vpn-tmp\wintun.zip" -DestinationPath "C:\vpn-tmp\wintun" -Force
-            Copy-Item "C:\vpn-tmp\wintun\wintun\bin\amd64\wintun.dll" "vpn\openvpn\wintun.dll" -Force
-          }
 
-          # 2) Userspace WireGuard SOCKS5 proxy (wireproxy.exe) for per-profile isolated WireGuard
+          # 2) Official Microsoft attestation-signed TAP-Windows6 driver installer (silent /S during setup)
+          Invoke-WebRequest -Uri "https://build.openvpn.net/downloads/releases/tap-windows-9.24.7-I601-Win10.exe" -OutFile "vpn\openvpn\tap-windows-setup.exe"
+
+          # 3) Userspace WireGuard SOCKS5 proxy (wireproxy.exe) for per-profile isolated WireGuard
           try {
             $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/windtf/wireproxy/releases/latest" -Headers @{ "User-Agent" = "MHAdvancedTool-CI" }
             $asset = $rel.assets | Where-Object { $_.name -like "*windows*amd64*" } | Select-Object -First 1
@@ -131,7 +129,7 @@ jobs:
             Write-Warning "wireproxy bundle skipped: $_"
           }
 
-          # 3) Official WireGuard x64 binaries (optional system-wide fallback)
+          # 4) Official WireGuard x64 binaries (optional system-wide fallback)
           try {
             Invoke-WebRequest -Uri "https://download.wireguard.com/windows-client/wireguard-amd64-0.5.3.msi" -OutFile "C:\vpn-tmp\wireguard.msi"
             Start-Process msiexec.exe -ArgumentList "/a C:\vpn-tmp\wireguard.msi /qn TARGETDIR=C:\vpn-tmp\wg" -Wait
