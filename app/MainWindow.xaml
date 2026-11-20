@@ -1,0 +1,360 @@
+<Window x:Class="MHVirtualCam.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:MHVirtualCam"
+        Title="MH Virtualcam" Icon="pack://application:,,,/app.ico"
+        Width="1220" Height="790" MinWidth="1000" MinHeight="660"
+        Background="{StaticResource Bg}" Foreground="{StaticResource Text}"
+        FontFamily="Segoe UI" KeyDown="Window_KeyDown" Loaded="Window_Loaded"
+        AllowDrop="True" Drop="Window_Drop" DragOver="Window_DragOver">
+    <Window.Resources>
+        <local:KindIconConverter x:Key="KindIconConverter"/>
+        <BooleanToVisibilityConverter x:Key="BoolToVis"/>
+    </Window.Resources>
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="52"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="28"/>
+        </Grid.RowDefinitions>
+
+        <!-- ======================= TOP BAR ======================= -->
+        <Border Grid.Row="0" Background="{StaticResource Surface}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1">
+            <Grid Margin="14,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Path Style="{StaticResource IconPath}" Data="{StaticResource IconVideoCam}" Fill="{StaticResource Accent}" Width="22" Height="22"/>
+                    <TextBlock Text="MH Virtualcam" FontSize="15" FontWeight="SemiBold" Margin="9,0,0,0" VerticalAlignment="Center"/>
+                    <TextBlock Text="v1.9" Foreground="{StaticResource Muted}" FontSize="11" Margin="8,2,0,0" VerticalAlignment="Center"/>
+                </StackPanel>
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,12,0">
+                    <Ellipse x:Name="OnAirDot" Width="9" Height="9" Fill="{StaticResource Muted}" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="OnAirText" Text="OFF AIR" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource Muted}" Margin="6,0,0,0" VerticalAlignment="Center"/>
+                </StackPanel>
+                <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button Style="{StaticResource FlatButton}" Click="BtnOpenBrowser_Click" Margin="0,0,10,0" ToolTip="Open built-in native C++ MH Browser">
+                        <TextBlock Text="MH Browser"/>
+                    </Button>
+                    <Button x:Name="BtnStream" Style="{StaticResource AccentButton}" Click="BtnStream_Click" VerticalAlignment="Center" MinWidth="168">
+                    <StackPanel Orientation="Horizontal">
+                        <Path Style="{StaticResource IconPath}" Data="{StaticResource IconVideoCam}" Fill="#FF111111" Width="16" Height="16"/>
+                        <TextBlock x:Name="BtnStreamText" Text="Start Virtual Camera" Margin="7,0,0,0"/>
+                    </StackPanel>
+                    </Button>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- ======================= BODY ======================= -->
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="370"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- ===== Left: preview + transport + zoom/position ===== -->
+            <Grid Grid.Column="0" Margin="14,12,7,12">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <Border Grid.Row="0" Background="#FF000000" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="8" ClipToBounds="True">
+                    <Grid>
+                        <Image x:Name="PreviewImage" Stretch="Uniform" Cursor="Hand"
+                               MouseWheel="Preview_MouseWheel" MouseLeftButtonDown="Preview_MouseDown"
+                               MouseMove="Preview_MouseMove" MouseLeftButtonUp="Preview_MouseUp"/>
+                        <TextBlock x:Name="PreviewEmptyText" Text="Add images or video clips to the playlist to begin"
+                                   Foreground="{StaticResource Muted}" FontSize="13"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        <Border VerticalAlignment="Top" HorizontalAlignment="Left" Margin="10" Background="{StaticResource Panel}" CornerRadius="4" Padding="8,4">
+                            <TextBlock x:Name="PreviewMetaText" Text="1280 x 720  -  16:9  -  30 fps" FontSize="11" Foreground="{StaticResource Text}"/>
+                        </Border>
+                        <Border VerticalAlignment="Top" HorizontalAlignment="Right" Margin="10" Background="{StaticResource Panel}" CornerRadius="4" Padding="8,4">
+                            <TextBlock x:Name="ZoomMetaText" Text="3D Dolly 100%  -  1.00x" FontSize="11"/>
+                        </Border>
+                    </Grid>
+                </Border>
+
+                <!-- Transport -->
+                <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,10,0,0">
+                    <Button Style="{StaticResource IconButton}" Click="BtnPrev_Click" ToolTip="Previous (B / Ctrl+Alt+B)">
+                        <Path Style="{StaticResource IconPath}" Data="{StaticResource IconPrev}"/>
+                    </Button>
+                    <Button x:Name="BtnPlay" Style="{StaticResource IconButton}" Click="BtnPlay_Click" Margin="8,0,0,0" ToolTip="Play / Pause (Space)">
+                        <Path x:Name="PlayIcon" Style="{StaticResource IconPath}" Data="{StaticResource IconPlay}"/>
+                    </Button>
+                    <Button Style="{StaticResource IconButton}" Click="BtnNext_Click" Margin="8,0,0,0" ToolTip="Next (N / Ctrl+Alt+N)">
+                        <Path Style="{StaticResource IconPath}" Data="{StaticResource IconNext}"/>
+                    </Button>
+                    <Button x:Name="BtnLoop" Style="{StaticResource IconButton}" Click="BtnLoop_Click" Margin="16,0,0,0" ToolTip="Loop mode: Playlist / Single / Off (L)">
+                        <Path x:Name="LoopIcon" Style="{StaticResource IconPath}" Data="{StaticResource IconRepeat}"/>
+                    </Button>
+                    <Button x:Name="BtnAuto" Style="{StaticResource IconButton}" Click="BtnAuto_Click" Margin="8,0,0,0" ToolTip="Auto change clips / images (A)">
+                        <Path x:Name="AutoIcon" Style="{StaticResource IconPath}" Data="{StaticResource IconAutoPlay}"/>
+                    </Button>
+                    <Button Style="{StaticResource IconButton}" Click="BtnShortcuts_Click" Margin="16,0,0,0" ToolTip="Keyboard shortcuts">
+                        <Path Style="{StaticResource IconPath}" Data="{StaticResource IconKeyboard}"/>
+                    </Button>
+                </StackPanel>
+
+                <!-- Zoom / Dolly row -->
+                <Grid Grid.Row="2" Margin="0,10,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="68"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="ZOOM" Style="{StaticResource SectionTitle}" Margin="0" VerticalAlignment="Center"/>
+                    <Button Grid.Column="1" Style="{StaticResource IconButton}" Width="30" Height="30" Click="BtnZoomOut_Click" ToolTip="Pull camera back (-)">
+                        <Path Style="{StaticResource IconPath}" Data="{StaticResource IconMinus}" Width="14" Height="14"/>
+                    </Button>
+                    <Slider x:Name="ZoomSlider" Grid.Column="2" Minimum="1" Maximum="4" Value="1" TickFrequency="0.05"
+                            VerticalAlignment="Center" Margin="10,0" ValueChanged="ZoomSlider_ValueChanged"/>
+                    <Button Grid.Column="3" Style="{StaticResource IconButton}" Width="30" Height="30" Click="BtnZoomIn_Click" ToolTip="Push camera closer (+)">
+                        <Path Style="{StaticResource IconPath}" Data="{StaticResource IconPlus}" Width="14" Height="14"/>
+                    </Button>
+                    <Button Grid.Column="4" Style="{StaticResource FlatButton}" Margin="8,0,0,0" Padding="10,5" Click="BtnZoomReset_Click" ToolTip="Reset zoom and position (0)">
+                        <TextBlock Text="Reset"/>
+                    </Button>
+                </Grid>
+
+                <!-- Position / Framing row -->
+                <Grid Grid.Row="3" Margin="0,8,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="68"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="POSITION" Style="{StaticResource SectionTitle}" Margin="0" VerticalAlignment="Center"/>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal">
+                        <Button Style="{StaticResource IconButton}" Width="30" Height="30" Click="BtnPanLeft_Click" ToolTip="Move Left (Left Arrow)">
+                            <Path Style="{StaticResource IconPath}" Data="{StaticResource IconArrowLeft}" Width="14" Height="14"/>
+                        </Button>
+                        <Button Style="{StaticResource IconButton}" Width="30" Height="30" Margin="6,0,0,0" Click="BtnPanUp_Click" ToolTip="Move Up (Up Arrow)">
+                            <Path Style="{StaticResource IconPath}" Data="{StaticResource IconArrowUp}" Width="14" Height="14"/>
+                        </Button>
+                        <Button Style="{StaticResource IconButton}" Width="30" Height="30" Margin="6,0,0,0" Click="BtnPanDown_Click" ToolTip="Move Down (Down Arrow)">
+                            <Path Style="{StaticResource IconPath}" Data="{StaticResource IconArrowDown}" Width="14" Height="14"/>
+                        </Button>
+                        <Button Style="{StaticResource IconButton}" Width="30" Height="30" Margin="6,0,0,0" Click="BtnPanRight_Click" ToolTip="Move Right (Right Arrow)">
+                            <Path Style="{StaticResource IconPath}" Data="{StaticResource IconArrowRight}" Width="14" Height="14"/>
+                        </Button>
+                        <Button Style="{StaticResource FlatButton}" Margin="8,0,0,0" Padding="10,5" Click="BtnPanCenter_Click" ToolTip="Center image / clip">
+                            <TextBlock Text="Center"/>
+                        </Button>
+                    </StackPanel>
+                    <TextBlock x:Name="PanMetaText" Grid.Column="2" Text="Arrow keys or Drag to move" Foreground="{StaticResource Muted}" FontSize="11" VerticalAlignment="Center" HorizontalAlignment="Right"/>
+                </Grid>
+            </Grid>
+
+            <!-- ===== Right: playlist + 3D camera + audio + output settings ===== -->
+            <Border Grid.Column="1" Background="{StaticResource Surface}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1,0,0,0">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="14,10,14,14">
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="PLAYLIST" Style="{StaticResource SectionTitle}" Margin="0,2,0,6"/>
+                            <TextBlock x:Name="PlaylistCountText" Grid.Column="1" Text="0 items" Foreground="{StaticResource Muted}" FontSize="11" VerticalAlignment="Center"/>
+                        </Grid>
+                        <StackPanel Orientation="Horizontal">
+                            <Button Style="{StaticResource FlatButton}" Click="BtnAddVideos_Click">
+                                <StackPanel Orientation="Horizontal">
+                                    <Path Style="{StaticResource IconPath}" Data="{StaticResource IconFilm}" Width="15" Height="15"/>
+                                    <TextBlock Text="Add Videos" Margin="6,0,0,0"/>
+                                </StackPanel>
+                            </Button>
+                            <Button Style="{StaticResource FlatButton}" Click="BtnAddImages_Click" Margin="8,0,0,0">
+                                <StackPanel Orientation="Horizontal">
+                                    <Path Style="{StaticResource IconPath}" Data="{StaticResource IconImage}" Width="15" Height="15"/>
+                                    <TextBlock Text="Add Images" Margin="6,0,0,0"/>
+                                </StackPanel>
+                            </Button>
+                            <Button Style="{StaticResource IconButton}" Click="BtnClear_Click" Margin="8,0,0,0" Width="34" Height="32" ToolTip="Clear playlist">
+                                <Path Style="{StaticResource IconPath}" Data="{StaticResource IconTrash}" Width="15" Height="15"/>
+                            </Button>
+                        </StackPanel>
+
+                        <ListBox x:Name="PlaylistBox" Margin="0,10,0,0" Height="165"
+                                 Background="{StaticResource Panel}" Foreground="{StaticResource Text}"
+                                 BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                                 HorizontalContentAlignment="Stretch"
+                                 MouseDoubleClick="PlaylistBox_DoubleClick" SelectionChanged="PlaylistBox_SelectionChanged">
+                            <ListBox.ContextMenu>
+                                <ContextMenu>
+                                    <MenuItem Header="Set Shortcut Key..." Click="BtnSetShortcut_Click"/>
+                                    <MenuItem Header="Split Video Clip..." Click="BtnSplitClip_Click"/>
+                                    <MenuItem Header="Clear Shortcut" Click="BtnClearShortcut_Click"/>
+                                    <MenuItem Header="Remove Item" Click="BtnRemove_Click"/>
+                                </ContextMenu>
+                            </ListBox.ContextMenu>
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid Margin="2,3">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="22"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Path Grid.Column="0" Style="{StaticResource IconPath}" Width="14" Height="14"
+                                              Data="{Binding Kind, Converter={StaticResource KindIconConverter}}"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding FileName}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+                                        <Border Grid.Column="2" Background="#FF383010" BorderBrush="{StaticResource Accent}" BorderThickness="1"
+                                                CornerRadius="4" Padding="5,1" Margin="6,0,6,0" VerticalAlignment="Center"
+                                                Visibility="{Binding HasShortcut, Converter={StaticResource BoolToVis}}">
+                                            <TextBlock Text="{Binding ShortcutDisplay}" Foreground="{StaticResource Accent}" FontSize="10" FontWeight="SemiBold"/>
+                                        </Border>
+                                        <TextBlock Grid.Column="3" Text="{Binding KindLabel}" Foreground="{StaticResource Muted}" FontSize="10" VerticalAlignment="Center"/>
+                                    </Grid>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                        <WrapPanel Margin="0,8,0,0">
+                            <Button Style="{StaticResource IconButton}" Width="32" Height="30" Click="BtnMoveUp_Click" ToolTip="Move item up in playlist (Ctrl+Up)" Margin="0,0,6,6">
+                                <Path Style="{StaticResource IconPath}" Data="{StaticResource IconArrowUp}" Width="14" Height="14"/>
+                            </Button>
+                            <Button Style="{StaticResource IconButton}" Width="32" Height="30" Click="BtnMoveDown_Click" ToolTip="Move item down in playlist (Ctrl+Down)" Margin="0,0,6,6">
+                                <Path Style="{StaticResource IconPath}" Data="{StaticResource IconArrowDown}" Width="14" Height="14"/>
+                            </Button>
+                            <Button Style="{StaticResource FlatButton}" Padding="8,5" Click="BtnSplitClip_Click" ToolTip="Split selected video into multiple parts" Margin="0,0,6,6">
+                                <StackPanel Orientation="Horizontal">
+                                    <Path Style="{StaticResource IconPath}" Data="{StaticResource IconScissors}" Width="13" Height="13"/>
+                                    <TextBlock Text="Split Clip" Margin="5,0,0,0" FontSize="12"/>
+                                </StackPanel>
+                            </Button>
+                            <Button Style="{StaticResource FlatButton}" Padding="8,5" Click="BtnSetShortcut_Click" ToolTip="Assign custom shortcut key to selected clip/part/image" Margin="0,0,6,6">
+                                <StackPanel Orientation="Horizontal">
+                                    <Path Style="{StaticResource IconPath}" Data="{StaticResource IconKeyboard}" Width="13" Height="13"/>
+                                    <TextBlock Text="Shortcut" Margin="5,0,0,0" FontSize="12"/>
+                                </StackPanel>
+                            </Button>
+                            <Button Style="{StaticResource FlatButton}" Padding="8,5" Click="BtnRemove_Click" ToolTip="Remove selected (Delete)" Margin="0,0,0,6">
+                                <TextBlock Text="Remove" FontSize="12"/>
+                            </Button>
+                        </WrapPanel>
+
+                        <!-- 3D CAMERA EFFECT -->
+                        <Grid Margin="0,8,0,4">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="3D REALISTIC CAMERA ZOOM" Style="{StaticResource SectionTitle}" Margin="0" VerticalAlignment="Center"/>
+                            <CheckBox x:Name="Chk3DCamera" Grid.Column="1" Content="3D Mode" IsChecked="True" Foreground="{StaticResource Accent}" FontWeight="SemiBold" FontSize="11.5"
+                                      Checked="Chk3DCamera_Changed" Unchecked="Chk3DCamera_Changed" VerticalAlignment="Center"/>
+                        </Grid>
+                        <Grid Margin="0,2,0,0">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="90"/><ColumnDefinition Width="*"/><ColumnDefinition Width="38"/></Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="3D Depth / Tilt" Foreground="{StaticResource Muted}" FontSize="11.5" VerticalAlignment="Center"/>
+                            <Slider x:Name="Depth3DSlider" Grid.Column="1" Minimum="0" Maximum="100" Value="55" VerticalAlignment="Center" ValueChanged="Depth3DSlider_ValueChanged"/>
+                            <TextBlock x:Name="Depth3DText" Grid.Column="2" Text="55%" FontSize="11" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                        </Grid>
+                        <Grid Margin="0,4,0,0">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="90"/><ColumnDefinition Width="*"/><ColumnDefinition Width="38"/></Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Live Motion" Foreground="{StaticResource Muted}" FontSize="11.5" VerticalAlignment="Center"/>
+                            <Slider x:Name="Motion3DSlider" Grid.Column="1" Minimum="0" Maximum="100" Value="30" VerticalAlignment="Center" ValueChanged="Motion3DSlider_ValueChanged"/>
+                            <TextBlock x:Name="Motion3DText" Grid.Column="2" Text="30%" FontSize="11" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                        </Grid>
+
+                        <!-- AUDIO & BACKGROUND MUSIC -->
+                        <TextBlock Text="AUDIO &amp; BACKGROUND MUSIC" Style="{StaticResource SectionTitle}"/>
+                        <ComboBox x:Name="AudioDeviceCombo" Style="{StaticResource DarkCombo}" SelectionChanged="AudioDeviceCombo_SelectionChanged" PreviewMouseWheel="Combo_PreviewMouseWheel"/>
+                        <Grid Margin="0,8,0,0">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="38"/></Grid.ColumnDefinitions>
+                            <CheckBox x:Name="ChkVideoSound" Grid.Column="0" Content="Video Sound" IsChecked="True" Foreground="{StaticResource Text}" FontSize="11.5" Margin="0,0,8,0"
+                                      Checked="ChkVideoSound_Changed" Unchecked="ChkVideoSound_Changed" VerticalAlignment="Center"/>
+                            <Slider x:Name="VideoVolSlider" Grid.Column="1" Minimum="0" Maximum="100" Value="85" VerticalAlignment="Center" ValueChanged="VideoVolSlider_ValueChanged"/>
+                            <TextBlock x:Name="VideoVolText" Grid.Column="2" Text="85%" FontSize="11" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                        </Grid>
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <Button Style="{StaticResource FlatButton}" Padding="8,4" FontSize="11.5" Click="BtnAddMusic_Click" Content="Add Music / Sound"/>
+                            <Button x:Name="BtnMusicPlay" Style="{StaticResource FlatButton}" Padding="8,4" FontSize="11.5" Margin="6,0,0,0" Click="BtnMusicPlay_Click" Content="Play / Pause"/>
+                            <Button Style="{StaticResource FlatButton}" Padding="8,4" FontSize="11.5" Margin="6,0,0,0" Click="BtnMusicStop_Click" Content="Stop"/>
+                        </StackPanel>
+                        <TextBlock x:Name="MusicTrackText" Text="No music loaded" Foreground="{StaticResource Muted}" FontSize="11" TextTrimming="CharacterEllipsis" Margin="0,5,0,0"/>
+                        <Grid Margin="0,4,0,0">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="90"/><ColumnDefinition Width="*"/><ColumnDefinition Width="38"/></Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Music Volume" Foreground="{StaticResource Muted}" FontSize="11.5" VerticalAlignment="Center"/>
+                            <Slider x:Name="MusicVolSlider" Grid.Column="1" Minimum="0" Maximum="100" Value="50" VerticalAlignment="Center" ValueChanged="MusicVolSlider_ValueChanged"/>
+                            <TextBlock x:Name="MusicVolText" Grid.Column="2" Text="50%" FontSize="11" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                        </Grid>
+
+                        <!-- VIDEO SPEED -->
+                        <TextBlock Text="VIDEO SPEED (SLOW / FAST MOTION)" Style="{StaticResource SectionTitle}"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/></Grid.ColumnDefinitions>
+                            <Slider x:Name="SpeedSlider" Minimum="0.25" Maximum="3.0" Value="1.0" TickFrequency="0.05" IsSnapToTickEnabled="True"
+                                    VerticalAlignment="Center" ValueChanged="SpeedSlider_ValueChanged"/>
+                            <TextBlock x:Name="SpeedText" Grid.Column="1" Text="1.00x" Foreground="{StaticResource Accent}" FontWeight="SemiBold" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                        </Grid>
+                        <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                            <Button Style="{StaticResource FlatButton}" Padding="8,4" FontSize="11.5" Click="BtnSpeed05_Click" Margin="0,0,6,0" Content="0.5x Slow"/>
+                            <Button Style="{StaticResource FlatButton}" Padding="8,4" FontSize="11.5" Click="BtnSpeed10_Click" Margin="0,0,6,0" Content="1x Normal"/>
+                            <Button Style="{StaticResource FlatButton}" Padding="8,4" FontSize="11.5" Click="BtnSpeed15_Click" Margin="0,0,6,0" Content="1.5x"/>
+                            <Button Style="{StaticResource FlatButton}" Padding="8,4" FontSize="11.5" Click="BtnSpeed20_Click" Content="2x Fast"/>
+                        </StackPanel>
+
+                        <TextBlock Text="ASPECT RATIO" Style="{StaticResource SectionTitle}"/>
+                        <ComboBox x:Name="RatioCombo" Style="{StaticResource DarkCombo}" SelectionChanged="RatioCombo_SelectionChanged" PreviewMouseWheel="Combo_PreviewMouseWheel"/>
+                        <TextBlock Text="RESOLUTION" Style="{StaticResource SectionTitle}"/>
+                        <ComboBox x:Name="ResolutionCombo" Style="{StaticResource DarkCombo}" SelectionChanged="ResolutionCombo_SelectionChanged" PreviewMouseWheel="Combo_PreviewMouseWheel"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="10"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="FRAME RATE" Style="{StaticResource SectionTitle}"/>
+                                <ComboBox x:Name="FpsCombo" Style="{StaticResource DarkCombo}" SelectionChanged="FpsCombo_SelectionChanged" PreviewMouseWheel="Combo_PreviewMouseWheel">
+                                    <ComboBoxItem Content="24 fps"/>
+                                    <ComboBoxItem Content="30 fps"/>
+                                    <ComboBoxItem Content="60 fps"/>
+                                </ComboBox>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Text="FIT MODE" Style="{StaticResource SectionTitle}"/>
+                                <ComboBox x:Name="FitCombo" Style="{StaticResource DarkCombo}" SelectionChanged="FitCombo_SelectionChanged" PreviewMouseWheel="Combo_PreviewMouseWheel">
+                                    <ComboBoxItem Content="Fill (crop)"/>
+                                    <ComboBoxItem Content="Fit (bars)"/>
+                                    <ComboBoxItem Content="Stretch"/>
+                                </ComboBox>
+                            </StackPanel>
+                        </Grid>
+
+                        <TextBlock Text="AUTO CHANGE - IMAGE HOLD TIME" Style="{StaticResource SectionTitle}"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/></Grid.ColumnDefinitions>
+                            <Slider x:Name="ImageSecondsSlider" Minimum="1" Maximum="60" Value="5" VerticalAlignment="Center"
+                                    ValueChanged="ImageSecondsSlider_ValueChanged"/>
+                            <TextBlock x:Name="ImageSecondsText" Grid.Column="1" Text="5 sec" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                        </Grid>
+
+                        <TextBlock Text="TRANSITION" Style="{StaticResource SectionTitle}"/>
+                        <ComboBox x:Name="TransitionCombo" Style="{StaticResource DarkCombo}" SelectionChanged="TransitionCombo_SelectionChanged" PreviewMouseWheel="Combo_PreviewMouseWheel">
+                            <ComboBoxItem Content="Fade"/>
+                            <ComboBoxItem Content="Cut"/>
+                        </ComboBox>
+
+                        <TextBlock Text="LOOP MODE" Style="{StaticResource SectionTitle}"/>
+                        <TextBlock x:Name="LoopModeText" Text="Loop playlist" Foreground="{StaticResource Text}" FontSize="12.5"/>
+                        <TextBlock Text="Camera appears as 'HD USB Webcam'. To send video sound/music into a browser or emulator mic, select 'CABLE Input' (VB-Cable) under Audio Output."
+                                   Foreground="{StaticResource Muted}" FontSize="11" TextWrapping="Wrap" Margin="0,12,0,0"/>
+                    </StackPanel>
+                </ScrollViewer>
+            </Border>
+        </Grid>
+
+        <!-- ======================= STATUS BAR ======================= -->
+        <Border Grid.Row="2" Background="{StaticResource Surface}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0">
+            <Grid Margin="14,0">
+                <TextBlock x:Name="StatusText" Text="Ready" FontSize="11" Foreground="{StaticResource Muted}" VerticalAlignment="Center"/>
+                <TextBlock x:Name="StatusRightText" Text="Arrows: Move Position   -   N/B: Next/Prev   -   Space: Play/Pause   -   +/-: 3D Dolly" FontSize="11"
+                           Foreground="{StaticResource Muted}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>
