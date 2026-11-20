@@ -6,6 +6,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Shell;
 
 namespace MHBrowser;
 
@@ -23,6 +24,9 @@ public partial class BrowserWindow : Window
     private int _activeIndex = -1;
     private CoreWebView2Environment? _env;
     private string _activeTimezone = "";
+    private double _geoLat;
+    private double _geoLon;
+    private bool _hasGeo;
 
     public BrowserWindow(BrowserProfile profile)
     {
@@ -31,15 +35,9 @@ public partial class BrowserWindow : Window
         Title = $"MH Browser - {profile.Name}";
         ProfileBadgeText.Text = profile.Name;
         ProxyBadgeText.Text = profile.ProxySummary;
-        UaStatusText.Text = profile.DeviceSummary;
+        UaStatusText.Text = $"{profile.DeviceSummary} | {profile.ScreenW}x{profile.ScreenH}";
 
         Loaded += async (_, _) => await InitEnvironmentAndFirstTabAsync();
-    }
-
-    protected override void OnSourceInitialized(EventArgs e)
-    {
-        base.OnSourceInitialized(e);
-        App.ApplyDarkTitleBar(this);
     }
 
     protected override void OnClosed(EventArgs e)
@@ -53,31 +51,72 @@ public partial class BrowserWindow : Window
         base.OnClosed(e);
     }
 
+    private void Window_StateChanged(object sender, EventArgs e)
+    {
+        RootGrid.Margin = WindowState == WindowState.Maximized ? new Thickness(7) : new Thickness(0);
+        BtnMaxRestore.Content = WindowState == WindowState.Maximized ? "\u2750" : "\u25A1";
+    }
+
+    private void BtnMin_Click(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
+    private void BtnMax_Click(object sender, RoutedEventArgs e) =>
+        WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+    private void BtnClose_Click(object sender, RoutedEventArgs e) => Close();
+
     private async Task InitEnvironmentAndFirstTabAsync()
     {
         try
         {
             _profile.IsRunning = true;
 
-            // Auto-detect timezone from active VPN / Proxy IP if enabled
-            _activeTimezone = _profile.Timezone;
-            if (_profile.AutoTimezone)
+            // Auto-connect per-profile OpenVPN / WireGuard if configured
+            if (_profile.ProxyType == "OpenVPN" && !string.IsNullOrWhiteSpace(_profile.VpnConfigPath))
             {
-                StatusText.Text = "Detecting IP & Timezone...";
-                var (ok, ip, loc, tz) = await IpTimezoneDetector.DetectAsync(_profile);
+                StatusText.Text = $"Starting OpenVPN ({Path.GetFileName(_profile.VpnConfigPath)})...";
+                var (ok, msg) = VpnController.ConnectOpenVpn(_profile.VpnConfigPath);
+                StatusText.Text = msg;
+                if (ok) await Task.Delay(3000);
+            }
+            else if (_profile.ProxyType == "WireGuard" && !string.IsNullOrWhiteSpace(_profile.VpnConfigPath))
+            {
+                StatusText.Text = $"Activating WireGuard ({Path.GetFileName(_profile.VpnConfigPath)})...";
+                var (ok, msg) = VpnController.ConnectWireGuard(_profile.VpnConfigPath);
+                StatusText.Text = msg;
+                if (ok) await Task.Delay(2500);
+            }
+
+            // Auto-detect timezone & geolocation from active VPN / Proxy IP if enabled
+            _activeTimezone = _profile.Timezone;
+            if (_profile.AutoTimezone || _profile.AutoGeolocation)
+            {
+                StatusText.Text = "Detecting IP, Timezone & Geolocation...";
+                var (ok, ip, loc, tz, lat, lon) = await IpTimezoneDetector.DetectAsync(_profile);
                 if (ok)
                 {
-                    _activeTimezone = tz;
-                    _profile.Timezone = tz;
+                    if (_profile.AutoTimezone)
+                    {
+                        _activeTimezone = tz;
+                        _profile.Timezone = tz;
+                    }
+                    if (_profile.AutoGeolocation && (Math.Abs(lat) > 0.001 || Math.Abs(lon) > 0.001))
+                    {
+                        _geoLat = lat;
+                        _geoLon = lon;
+                        _hasGeo = true;
+                    }
                     _profile.NotifyAll();
-                    StatusText.Text = $"IP: {ip} ({loc}) -> Timezone: {tz}";
+                    StatusText.Text = $"IP: {ip} ({loc}) | TZ: {_activeTimezone}";
                 }
             }
             TzBadgeText.Text = string.IsNullOrWhiteSpace(_activeTimezone) ? "TZ: System" : $"TZ: {_activeTimezone}";
 
             // Build isolated Chromium environment per profile
-            var args = new List<string> { $"--lang={_profile.Language}" };
-            if (_profile.ProxyType != "Direct" && !string.IsNullOrWhiteSpace(_profile.ProxyHost) && !string.IsNullOrWhiteSpace(_profile.ProxyPort))
+            var args = new List<string>
+            {
+                $"--lang={_profile.Language}",
+                "--disable-blink-features=AutomationControlled"
+            };
+            if (_profile.ProxyType is "HTTP" or "HTTPS" or "SOCKS5" &&
+                !string.IsNullOrWhiteSpace(_profile.ProxyHost) && !string.IsNullOrWhiteSpace(_profile.ProxyPort))
             {
                 string scheme = _profile.ProxyType switch
                 {
@@ -104,7 +143,7 @@ public partial class BrowserWindow : Window
             StatusText.Text = $"Chromium init error: {ex.Message}";
             MessageBox.Show(this,
                 $"Could not initialize WebView2 Chromium engine:\n{ex.Message}\n\nMake sure Microsoft Edge WebView2 Runtime is installed.",
-                "MH Browser", MessageBoxButton.OK, MessageBoxImage.Warning);
+                "MH Advanced Tool", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
 
@@ -121,14 +160,14 @@ public partial class BrowserWindow : Window
         await tab.WebView.EnsureCoreWebView2Async(_env);
         var core = tab.WebView.CoreWebView2;
 
-        // 1) User-Agent & native Chromium right-click / DevTools settings
+        // 1) User-Agent & native Chromium settings
         if (!string.IsNullOrWhiteSpace(_profile.UserAgent))
             core.Settings.UserAgent = _profile.UserAgent;
         core.Settings.AreDefaultContextMenusEnabled = true;
         core.Settings.AreDevToolsEnabled = true;
         core.Settings.IsStatusBarEnabled = false;
 
-        // 2) Apply per-profile timezone override via Chromium DevTools Protocol
+        // 2) CDP Timezone override
         if (!string.IsNullOrWhiteSpace(_activeTimezone))
         {
             try
@@ -139,10 +178,38 @@ public partial class BrowserWindow : Window
             catch { }
         }
 
-        // 3) Inject per-profile fingerprint consistency script (platform, cores, memory, webdriver, subtle canvas noise)
+        // 3) CDP Geolocation override synced to Proxy/VPN IP
+        if (_hasGeo && _profile.AutoGeolocation)
+        {
+            try
+            {
+                var geoPayload = JsonSerializer.Serialize(new { latitude = _geoLat, longitude = _geoLon, accuracy = 100 });
+                await core.CallDevToolsProtocolMethodAsync("Emulation.setGeolocationOverride", geoPayload);
+            }
+            catch { }
+        }
+
+        // 4) CDP Mobile device metrics override for Mobile/Tablet presets
+        if (_profile.IsMobile && _profile.ScreenW > 200 && _profile.ScreenH > 200)
+        {
+            try
+            {
+                var metricsPayload = JsonSerializer.Serialize(new
+                {
+                    width = _profile.ScreenW,
+                    height = _profile.ScreenH,
+                    deviceScaleFactor = _profile.PixelRatio,
+                    mobile = true
+                });
+                await core.CallDevToolsProtocolMethodAsync("Emulation.setDeviceMetricsOverride", metricsPayload);
+            }
+            catch { }
+        }
+
+        // 5) Inject advanced multi-layer fingerprint spoofing script
         await core.AddScriptToExecuteOnDocumentCreatedAsync(BuildFingerprintScript());
 
-        // 4) Auto-authenticate HTTP/HTTPS proxy credentials if provided
+        // 6) Auto-authenticate HTTP/HTTPS proxy credentials if provided
         core.BasicAuthenticationRequested += (_, e) =>
         {
             if (!string.IsNullOrWhiteSpace(_profile.ProxyUser))
@@ -152,7 +219,7 @@ public partial class BrowserWindow : Window
             }
         };
 
-        // 5) Open target="_blank" links as new tabs inside MH Browser (never spawn Edge/Chrome)
+        // 7) Open target="_blank" links as new tabs inside MH Browser
         core.NewWindowRequested += (_, e) =>
         {
             e.Handled = true;
@@ -160,7 +227,7 @@ public partial class BrowserWindow : Window
             Dispatcher.BeginInvoke(async () => await OpenNewTabAsync(targetUri));
         };
 
-        // 6) Add custom MH Browser items to Chromium's native right-click context menu
+        // 8) Native right-click context menu item
         core.ContextMenuRequested += (_, e) =>
         {
             try
@@ -168,7 +235,7 @@ public partial class BrowserWindow : Window
                 if (!string.IsNullOrEmpty(e.ContextMenuTarget.LinkUri))
                 {
                     var link = e.ContextMenuTarget.LinkUri;
-                    var itemNewTab = core.Environment.CreateContextMenuItem("Open Link in New MH Tab", null, CoreWebView2ContextMenuItemKind.Command);
+                    var itemNewTab = core.Environment.CreateContextMenuItem("Open Link in New Tab", null, CoreWebView2ContextMenuItemKind.Command);
                     itemNewTab.CustomItemSelected += (_, _) => Dispatcher.BeginInvoke(async () => await OpenNewTabAsync(link));
                     e.MenuItems.Insert(0, itemNewTab);
                 }
@@ -176,7 +243,7 @@ public partial class BrowserWindow : Window
             catch { }
         };
 
-        // 7) Auto-allow camera/mic permission when user tests HD USB Webcam
+        // 9) Auto-allow camera/mic permission for HD USB Webcam
         core.PermissionRequested += (_, e) =>
         {
             if (e.PermissionKind is CoreWebView2PermissionKind.Camera or CoreWebView2PermissionKind.Microphone)
@@ -207,19 +274,77 @@ public partial class BrowserWindow : Window
     {
         var plat = JsonSerializer.Serialize(_profile.Platform);
         var lang = JsonSerializer.Serialize(_profile.Language);
+        var webglVendor = JsonSerializer.Serialize(string.IsNullOrWhiteSpace(_profile.WebGlVendor) ? "Google Inc. (NVIDIA)" : _profile.WebGlVendor);
+        var webglRenderer = JsonSerializer.Serialize(string.IsNullOrWhiteSpace(_profile.WebGlRenderer) ? "ANGLE (NVIDIA, NVIDIA GeForce RTX 4060 Direct3D11 vs_5_0 ps_5_0, D3D11)" : _profile.WebGlRenderer);
         int cores = Math.Clamp(_profile.HardwareConcurrency, 2, 32);
         int mem = Math.Clamp(_profile.DeviceMemoryGb, 2, 64);
+        int sw = Math.Clamp(_profile.ScreenW, 320, 7680);
+        int sh = Math.Clamp(_profile.ScreenH, 320, 4320);
+        double dpr = Math.Clamp(_profile.PixelRatio, 1.0, 4.0);
+        string isMobileJs = _profile.IsMobile ? "true" : "false";
+        int touchPoints = _profile.IsMobile ? 5 : 0;
+        string chPlatform = _profile.Platform.Contains("Mac", StringComparison.OrdinalIgnoreCase) ? "macOS"
+            : _profile.Platform.Contains("iPhone", StringComparison.OrdinalIgnoreCase) || _profile.Platform.Contains("iPad", StringComparison.OrdinalIgnoreCase) ? "iOS"
+            : _profile.UserAgent.Contains("Android", StringComparison.OrdinalIgnoreCase) ? "Android"
+            : _profile.Platform.Contains("Linux", StringComparison.OrdinalIgnoreCase) ? "Linux"
+            : "Windows";
+        var chPlatJson = JsonSerializer.Serialize(chPlatform);
         int seed = _profile.NoiseSeed;
-        string noiseBlock = _profile.FingerprintNoise ? $@"
+
+        string canvasBlock = _profile.FingerprintNoise ? $@"
 try {{
   const seed = {seed};
   const origGetImageData = CanvasRenderingContext2D.prototype.getImageData;
   CanvasRenderingContext2D.prototype.getImageData = function(x, y, w, h) {{
     const img = origGetImageData.call(this, x, y, w, h);
-    if (img && img.data && img.data.length > 4) {{
-      img.data[0] = (img.data[0] + (seed % 3)) & 255;
+    if (img && img.data && img.data.length > 8) {{
+      img.data[0] = (img.data[0] + (seed % 3) + 1) & 255;
+      img.data[4] = (img.data[4] + ((seed >> 2) % 3)) & 255;
     }}
     return img;
+  }};
+  const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
+  HTMLCanvasElement.prototype.toDataURL = function() {{
+    try {{
+      const ctx = this.getContext('2d');
+      if (ctx && this.width > 2 && this.height > 2) {{
+        const px = origGetImageData.call(ctx, 0, 0, 1, 1);
+        px.data[0] = (px.data[0] ^ ((seed % 2) + 1)) & 255;
+        ctx.putImageData(px, 0, 0);
+      }}
+    }} catch (e) {{}}
+    return origToDataURL.apply(this, arguments);
+  }};
+}} catch (e) {{}}" : "";
+
+        string webglBlock = _profile.WebGlSpoof ? $@"
+try {{
+  const patchWebGL = (proto) => {{
+    if (!proto || !proto.getParameter) return;
+    const origGetParameter = proto.getParameter;
+    proto.getParameter = function(param) {{
+      if (param === 37445) return {webglVendor};
+      if (param === 37446) return {webglRenderer};
+      return origGetParameter.call(this, param);
+    }};
+  }};
+  if (typeof WebGLRenderingContext !== 'undefined') patchWebGL(WebGLRenderingContext.prototype);
+  if (typeof WebGL2RenderingContext !== 'undefined') patchWebGL(WebGL2RenderingContext.prototype);
+}} catch (e) {{}}" : "";
+
+        string audioBlock = _profile.AudioNoise ? $@"
+try {{
+  const aSeed = (({seed} % 97) + 1) * 1e-7;
+  const origGetChannelData = AudioBuffer.prototype.getChannelData;
+  AudioBuffer.prototype.getChannelData = function(channel) {{
+    const data = origGetChannelData.call(this, channel);
+    if (data && data.length > 0 && !data.__mhPatched) {{
+      for (let i = 0; i < Math.min(data.length, 64); i += 16) {{
+        data[i] = data[i] + aSeed;
+      }}
+      Object.defineProperty(data, '__mhPatched', {{ value: true }});
+    }}
+    return data;
   }};
 }} catch (e) {{}}" : "";
 
@@ -229,10 +354,37 @@ try {{
   Object.defineProperty(navigator, 'platform', {{ get: () => {plat} }});
   Object.defineProperty(navigator, 'hardwareConcurrency', {{ get: () => {cores} }});
   Object.defineProperty(navigator, 'deviceMemory', {{ get: () => {mem} }});
+  Object.defineProperty(navigator, 'maxTouchPoints', {{ get: () => {touchPoints} }});
   Object.defineProperty(navigator, 'language', {{ get: () => {lang} }});
   Object.defineProperty(navigator, 'languages', {{ get: () => [{lang}, 'en'] }});
+  if (navigator.userAgentData) {{
+    const uaData = {{
+      brands: [{{ brand: 'Chromium', version: '131' }}, {{ brand: 'Not_A Brand', version: '24' }}, {{ brand: 'Google Chrome', version: '131' }}],
+      mobile: {isMobileJs},
+      platform: {chPlatJson},
+      getHighEntropyValues: async (hints) => ({{
+        architecture: 'x86',
+        bitness: '64',
+        mobile: {isMobileJs},
+        model: '',
+        platform: {chPlatJson},
+        platformVersion: '15.0.0',
+        uaFullVersion: '131.0.0.0'
+      }})
+    }};
+    Object.defineProperty(navigator, 'userAgentData', {{ get: () => uaData }});
+  }}
+  Object.defineProperty(window, 'devicePixelRatio', {{ get: () => {dpr.ToString(System.Globalization.CultureInfo.InvariantCulture)} }});
+  Object.defineProperty(screen, 'width', {{ get: () => {sw} }});
+  Object.defineProperty(screen, 'height', {{ get: () => {sh} }});
+  Object.defineProperty(screen, 'availWidth', {{ get: () => {sw} }});
+  Object.defineProperty(screen, 'availHeight', {{ get: () => {Math.Max(sh - 40, 200)} }});
+  Object.defineProperty(screen, 'colorDepth', {{ get: () => 24 }});
+  Object.defineProperty(screen, 'pixelDepth', {{ get: () => 24 }});
 }} catch (e) {{}}
-{noiseBlock}";
+{canvasBlock}
+{webglBlock}
+{audioBlock}";
     }
 
     private void SelectTab(int index)
@@ -282,24 +434,26 @@ try {{
                 Background = Brushes.Transparent,
                 Foreground = (Brush)FindResource("Muted"),
                 BorderThickness = new Thickness(0),
-                Padding = new Thickness(6, 0, 2, 0),
-                FontSize = 14,
+                Padding = new Thickness(7, 0, 2, 0),
+                FontSize = 13.5,
                 Cursor = Cursors.Hand
             };
+            WindowChrome.SetIsHitTestVisibleInChrome(closeBtn, true);
             closeBtn.Click += (_, e) => { e.Handled = true; CloseTab(idx); };
             sp.Children.Add(closeBtn);
 
             var tabBorder = new Border
             {
                 Background = (Brush)FindResource(active ? "Panel" : "Surface"),
-                BorderBrush = (Brush)FindResource(active ? "Accent" : "BorderBrush"),
-                BorderThickness = active ? new Thickness(1, 2, 1, 0) : new Thickness(1),
-                CornerRadius = new CornerRadius(6, 6, 0, 0),
-                Padding = new Thickness(10, 5, 6, 5),
-                Margin = new Thickness(0, 4, 4, 0),
+                BorderBrush = active ? (Brush)FindResource("BorderBrush") : Brushes.Transparent,
+                BorderThickness = active ? new Thickness(1, 1, 1, 0) : new Thickness(0),
+                CornerRadius = new CornerRadius(8, 8, 0, 0),
+                Padding = new Thickness(12, 6, 8, 6),
+                Margin = new Thickness(0, 5, 3, 0),
                 Cursor = Cursors.Hand,
                 Child = sp
             };
+            WindowChrome.SetIsHitTestVisibleInChrome(tabBorder, true);
             tabBorder.MouseLeftButtonDown += (_, _) => SelectTab(idx);
             TabsPanel.Children.Add(tabBorder);
         }

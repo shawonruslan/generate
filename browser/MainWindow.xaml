@@ -1,12 +1,12 @@
 <Window x:Class="MHBrowser.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="MH Browser - Antidetect Profile Manager" Icon="pack://application:,,,/app.ico"
-        Width="1160" Height="720" MinWidth="940" MinHeight="580"
+        Title="MH Advanced Tool" Icon="pack://application:,,,/app.ico"
+        Width="1180" Height="730" MinWidth="960" MinHeight="600"
         Background="{StaticResource Bg}" Foreground="{StaticResource Text}" FontFamily="Segoe UI">
     <Grid>
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="220"/>
+            <ColumnDefinition Width="230"/>
             <ColumnDefinition Width="*"/>
         </Grid.ColumnDefinitions>
 
@@ -14,33 +14,44 @@
         <Border Grid.Column="0" Background="{StaticResource Surface}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,1,0">
             <DockPanel Margin="14,16">
                 <StackPanel DockPanel.Dock="Top">
-                    <StackPanel Orientation="Horizontal" Margin="4,0,0,18">
-                        <Path Style="{StaticResource IconPath}" Data="{StaticResource IconGlobe}" Fill="{StaticResource Accent}" Width="22" Height="22"/>
-                        <StackPanel Margin="10,0,0,0">
-                            <TextBlock Text="MH Browser" FontSize="15" FontWeight="SemiBold"/>
-                            <TextBlock Text="Chromium Antidetect v2.0" Foreground="{StaticResource Muted}" FontSize="10.5"/>
+                    <StackPanel Orientation="Horizontal" Margin="4,0,0,20">
+                        <Border Width="34" Height="34" CornerRadius="8" Background="#FF24200E" BorderBrush="{StaticResource Accent}" BorderThickness="1">
+                            <Path Style="{StaticResource IconPath}" Data="{StaticResource IconGrid}" Fill="{StaticResource Accent}" Width="17" Height="17"/>
+                        </Border>
+                        <StackPanel Margin="10,0,0,0" VerticalAlignment="Center">
+                            <TextBlock Text="MH Advanced Tool" Foreground="{StaticResource Text}" FontSize="14.5" FontWeight="SemiBold"/>
+                            <TextBlock Text="Professional Suite v3.0" Foreground="{StaticResource Muted}" FontSize="10.5"/>
                         </StackPanel>
                     </StackPanel>
+
+                    <TextBlock Text="WORKSPACE" Style="{StaticResource SectionLabel}" Margin="8,0,0,6"/>
+
+                    <Button x:Name="NavApps" Style="{StaticResource NavButton}" Background="{StaticResource Panel}" Foreground="{StaticResource Accent}" Click="NavApps_Click" Margin="0,0,0,4">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Style="{StaticResource IconPath}" Data="{StaticResource IconGrid}" Fill="{StaticResource Accent}" Width="15" Height="15"/>
+                            <TextBlock Text="Applications" Foreground="{StaticResource Text}" Margin="10,0,0,0"/>
+                        </StackPanel>
+                    </Button>
 
                     <Button x:Name="NavProfiles" Style="{StaticResource NavButton}" Click="NavProfiles_Click" Margin="0,0,0,4">
                         <StackPanel Orientation="Horizontal">
                             <Path Style="{StaticResource IconPath}" Data="{StaticResource IconUsers}" Width="15" Height="15"/>
-                            <TextBlock Text="Browser Profiles" Margin="10,0,0,0"/>
+                            <TextBlock Text="Browser Profiles" Foreground="{StaticResource Text}" Margin="10,0,0,0"/>
                         </StackPanel>
                     </Button>
 
                     <Button x:Name="NavVpn" Style="{StaticResource NavButton}" Click="NavVpn_Click">
                         <StackPanel Orientation="Horizontal">
                             <Path Style="{StaticResource IconPath}" Data="{StaticResource IconShield}" Width="15" Height="15"/>
-                            <TextBlock Text="VPN (OpenVPN / WG)" Margin="10,0,0,0"/>
+                            <TextBlock Text="VPN (OpenVPN / WG)" Foreground="{StaticResource Text}" Margin="10,0,0,0"/>
                         </StackPanel>
                     </Button>
                 </StackPanel>
 
                 <Border DockPanel.Dock="Bottom" Background="{StaticResource Panel}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="8" Padding="12">
                     <StackPanel>
-                        <TextBlock Text="ENGINE STATUS" Foreground="{StaticResource Muted}" FontSize="10" FontWeight="SemiBold"/>
-                        <TextBlock Text="Embedded Chromium" Foreground="{StaticResource Green}" FontSize="12" FontWeight="SemiBold" Margin="0,4,0,0"/>
+                        <TextBlock Text="SUITE STATUS" Foreground="{StaticResource Muted}" FontSize="10" FontWeight="SemiBold"/>
+                        <TextBlock Text="Chromium + VirtualCam" Foreground="{StaticResource Green}" FontSize="12" FontWeight="SemiBold" Margin="0,4,0,0"/>
                         <TextBlock x:Name="SidebarCountText" Text="0 Profiles" Foreground="{StaticResource Muted}" FontSize="11" Margin="0,2,0,0"/>
                     </StackPanel>
                 </Border>
@@ -58,26 +69,125 @@
 
             <!-- Top Bar -->
             <Border Grid.Row="0" Background="{StaticResource Surface}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1">
-                <Grid Margin="20,0">
+                <Grid Margin="22,0">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <TextBlock x:Name="PageTitleText" Grid.Column="0" Text="Browser Profiles" FontSize="17" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="PageTitleText" Grid.Column="0" Text="Applications" Foreground="{StaticResource Text}" FontSize="17" FontWeight="SemiBold" VerticalAlignment="Center"/>
                     <TextBox x:Name="SearchBox" Grid.Column="1" Style="{StaticResource DarkTextBox}" Width="260" Height="32"
-                             HorizontalAlignment="Right" Margin="0,0,12,0" TextChanged="SearchBox_TextChanged" ToolTip="Search profiles..."/>
-                    <Button x:Name="BtnCreateProfile" Grid.Column="2" Style="{StaticResource AccentButton}" Click="BtnCreateProfile_Click" VerticalAlignment="Center">
+                             HorizontalAlignment="Right" Margin="0,0,12,0" TextChanged="SearchBox_TextChanged" Visibility="Collapsed" ToolTip="Search profiles..."/>
+                    <Button x:Name="BtnCreateProfile" Grid.Column="2" Style="{StaticResource AccentButton}" Click="BtnCreateProfile_Click" Visibility="Collapsed" VerticalAlignment="Center">
                         <StackPanel Orientation="Horizontal">
                             <Path Style="{StaticResource IconPath}" Data="{StaticResource IconPlus}" Fill="#FF111111" Width="13" Height="13"/>
-                            <TextBlock Text="New Profile" Margin="6,0,0,0"/>
+                            <TextBlock Text="New Profile" Foreground="#FF111111" Margin="6,0,0,0"/>
                         </StackPanel>
                     </Button>
                 </Grid>
             </Border>
 
-            <!-- PROFILES VIEW -->
-            <Grid x:Name="ProfilesView" Grid.Row="1" Margin="20,16">
+            <!-- ======================= APPLICATIONS GRID VIEW ======================= -->
+            <ScrollViewer x:Name="AppsView" Grid.Row="1" Margin="24,20" VerticalScrollBarVisibility="Auto">
+                <StackPanel>
+                    <TextBlock Text="Select a tool below to launch. All modules run locally with isolated configurations."
+                               Foreground="{StaticResource Muted}" FontSize="12.5" Margin="0,0,0,16"/>
+
+                    <UniformGrid Columns="2" HorizontalAlignment="Stretch">
+                        <!-- Card 1: MH Virtual Camera -->
+                        <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="10" Padding="20" Margin="0,0,14,14">
+                            <DockPanel>
+                                <StackPanel DockPanel.Dock="Top">
+                                    <Grid>
+                                        <Border Width="42" Height="42" CornerRadius="9" Background="#FF24200E" BorderBrush="{StaticResource Accent}" BorderThickness="1" HorizontalAlignment="Left">
+                                            <Path Style="{StaticResource IconPath}" Data="{StaticResource IconVideoCam}" Fill="{StaticResource Accent}" Width="20" Height="20"/>
+                                        </Border>
+                                        <Border Background="#FF112A22" BorderBrush="{StaticResource Green}" BorderThickness="1" CornerRadius="4" Padding="7,2" HorizontalAlignment="Right" VerticalAlignment="Top">
+                                            <TextBlock Text="HD USB WEBCAM" Foreground="{StaticResource Green}" FontSize="10" FontWeight="SemiBold"/>
+                                        </Border>
+                                    </Grid>
+                                    <TextBlock Text="MH Virtual Camera" Foreground="{StaticResource Text}" FontSize="16" FontWeight="SemiBold" Margin="0,14,0,6"/>
+                                    <TextBlock Text="Virtual webcam engine for DirectShow &amp; Windows 11 Media Foundation with 3D Dolly Zoom, slow/fast speed, clip splitter, audio sync, and custom global shortcuts."
+                                               Foreground="{StaticResource Muted}" FontSize="12" TextWrapping="Wrap" LineHeight="18"/>
+                                </StackPanel>
+                                <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,18,0,0">
+                                    <Button Style="{StaticResource AccentButton}" Content="Open Virtual Camera" Padding="14,7" Click="BtnLaunchVirtualCam_Click"/>
+                                </StackPanel>
+                            </DockPanel>
+                        </Border>
+
+                        <!-- Card 2: Antidetect Browser Profiles -->
+                        <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="10" Padding="20" Margin="0,0,0,14">
+                            <DockPanel>
+                                <StackPanel DockPanel.Dock="Top">
+                                    <Grid>
+                                        <Border Width="42" Height="42" CornerRadius="9" Background="#FF122620" BorderBrush="{StaticResource Green}" BorderThickness="1" HorizontalAlignment="Left">
+                                            <Path Style="{StaticResource IconPath}" Data="{StaticResource IconUsers}" Fill="{StaticResource Green}" Width="20" Height="20"/>
+                                        </Border>
+                                        <Border Background="{StaticResource PanelAlt}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="4" Padding="7,2" HorizontalAlignment="Right" VerticalAlignment="Top">
+                                            <TextBlock Text="EMBEDDED CHROMIUM" Foreground="{StaticResource Text}" FontSize="10" FontWeight="SemiBold"/>
+                                        </Border>
+                                    </Grid>
+                                    <TextBlock Text="Antidetect Browser Profiles" Foreground="{StaticResource Text}" FontSize="16" FontWeight="SemiBold" Margin="0,14,0,6"/>
+                                    <TextBlock Text="Create isolated multi-account browser profiles with WebGL GPU spoofing, Canvas &amp; AudioContext noise, 22+ PC/Mobile/TV/Console presets, Proxy/VPN &amp; Auto-Timezone."
+                                               Foreground="{StaticResource Muted}" FontSize="12" TextWrapping="Wrap" LineHeight="18"/>
+                                </StackPanel>
+                                <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,18,0,0">
+                                    <Button Style="{StaticResource GreenButton}" Content="Manage Profiles" Padding="14,7" Click="NavProfiles_Click"/>
+                                    <Button Style="{StaticResource FlatButton}" Content="+ New Profile" Padding="12,7" Margin="8,0,0,0" Click="BtnCreateProfile_Click"/>
+                                </StackPanel>
+                            </DockPanel>
+                        </Border>
+
+                        <!-- Card 3: Built-in VPN Manager -->
+                        <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="10" Padding="20" Margin="0,0,14,0">
+                            <DockPanel>
+                                <StackPanel DockPanel.Dock="Top">
+                                    <Grid>
+                                        <Border Width="42" Height="42" CornerRadius="9" Background="#FF1C2331" BorderBrush="#FF3B82F6" BorderThickness="1" HorizontalAlignment="Left">
+                                            <Path Style="{StaticResource IconPath}" Data="{StaticResource IconShield}" Fill="#FF60A5FA" Width="20" Height="20"/>
+                                        </Border>
+                                        <Border Background="{StaticResource PanelAlt}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="4" Padding="7,2" HorizontalAlignment="Right" VerticalAlignment="Top">
+                                            <TextBlock Text="PORTABLE WINTUN" Foreground="{StaticResource Muted}" FontSize="10" FontWeight="SemiBold"/>
+                                        </Border>
+                                    </Grid>
+                                    <TextBlock Text="Built-in VPN Manager" Foreground="{StaticResource Text}" FontSize="16" FontWeight="SemiBold" Margin="0,14,0,6"/>
+                                    <TextBlock Text="Connect OpenVPN (.ovpn) and WireGuard (.conf) tunnels directly with bundled portable binaries — no external OpenVPN or WireGuard software installation needed."
+                                               Foreground="{StaticResource Muted}" FontSize="12" TextWrapping="Wrap" LineHeight="18"/>
+                                </StackPanel>
+                                <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,18,0,0">
+                                    <Button Style="{StaticResource FlatButton}" Content="Open VPN Manager" Padding="14,7" Click="NavVpn_Click"/>
+                                </StackPanel>
+                            </DockPanel>
+                        </Border>
+
+                        <!-- Card 4: Quick Launch Browser -->
+                        <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="10" Padding="20" Margin="0">
+                            <DockPanel>
+                                <StackPanel DockPanel.Dock="Top">
+                                    <Grid>
+                                        <Border Width="42" Height="42" CornerRadius="9" Background="#FF24200E" BorderBrush="{StaticResource Accent}" BorderThickness="1" HorizontalAlignment="Left">
+                                            <Path Style="{StaticResource IconPath}" Data="{StaticResource IconGlobe}" Fill="{StaticResource Accent}" Width="20" Height="20"/>
+                                        </Border>
+                                        <Border Background="{StaticResource PanelAlt}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="4" Padding="7,2" HorizontalAlignment="Right" VerticalAlignment="Top">
+                                            <TextBlock Text="1-CLICK LAUNCH" Foreground="{StaticResource Accent}" FontSize="10" FontWeight="SemiBold"/>
+                                        </Border>
+                                    </Grid>
+                                    <TextBlock Text="Quick Launch Browser" Foreground="{StaticResource Text}" FontSize="16" FontWeight="SemiBold" Margin="0,14,0,6"/>
+                                    <TextBlock Text="Immediately open your default antidetect Chromium browser window with unified tabs-in-titlebar, WebRTC leak protection, and HD USB Webcam support."
+                                               Foreground="{StaticResource Muted}" FontSize="12" TextWrapping="Wrap" LineHeight="18"/>
+                                </StackPanel>
+                                <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,18,0,0">
+                                    <Button Style="{StaticResource AccentButton}" Content="Launch Browser Now" Padding="14,7" Click="BtnQuickLaunchBrowser_Click"/>
+                                </StackPanel>
+                            </DockPanel>
+                        </Border>
+                    </UniformGrid>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- ======================= PROFILES VIEW ======================= -->
+            <Grid x:Name="ProfilesView" Grid.Row="1" Margin="20,16" Visibility="Collapsed">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="32"/>
                     <RowDefinition Height="*"/>
@@ -88,15 +198,15 @@
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="2.0*"/>
-                            <ColumnDefinition Width="0.9*"/>
-                            <ColumnDefinition Width="1.6*"/>
+                            <ColumnDefinition Width="0.85*"/>
+                            <ColumnDefinition Width="1.65*"/>
                             <ColumnDefinition Width="1.7*"/>
                             <ColumnDefinition Width="1.2*"/>
                             <ColumnDefinition Width="225"/>
                         </Grid.ColumnDefinitions>
                         <TextBlock Grid.Column="0" Text="PROFILE NAME" Foreground="{StaticResource Muted}" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center"/>
                         <TextBlock Grid.Column="1" Text="STATUS" Foreground="{StaticResource Muted}" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center"/>
-                        <TextBlock Grid.Column="2" Text="PROXY" Foreground="{StaticResource Muted}" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="2" Text="PROXY / VPN" Foreground="{StaticResource Muted}" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center"/>
                         <TextBlock Grid.Column="3" Text="DEVICE / USER-AGENT" Foreground="{StaticResource Muted}" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center"/>
                         <TextBlock Grid.Column="4" Text="TIMEZONE" Foreground="{StaticResource Muted}" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center"/>
                         <TextBlock Grid.Column="5" Text="ACTIONS" Foreground="{StaticResource Muted}" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center" HorizontalAlignment="Right"/>
@@ -104,10 +214,13 @@
                 </Border>
 
                 <!-- Profile Rows -->
-                <ListBox x:Name="ProfilesList" Grid.Row="1" Background="{StaticResource Surface}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1,0,1,1"
+                <ListBox x:Name="ProfilesList" Grid.Row="1" Background="{StaticResource Surface}" Foreground="{StaticResource Text}"
+                         BorderBrush="{StaticResource BorderBrush}" BorderThickness="1,0,1,1"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                          HorizontalContentAlignment="Stretch" Padding="0">
                     <ListBox.ItemContainerStyle>
                         <Style TargetType="ListBoxItem">
+                            <Setter Property="Foreground" Value="{StaticResource Text}"/>
                             <Setter Property="Padding" Value="0"/>
                             <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
                             <Setter Property="Template">
@@ -131,14 +244,14 @@
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="2.0*"/>
-                                    <ColumnDefinition Width="0.9*"/>
-                                    <ColumnDefinition Width="1.6*"/>
+                                    <ColumnDefinition Width="0.85*"/>
+                                    <ColumnDefinition Width="1.65*"/>
                                     <ColumnDefinition Width="1.7*"/>
                                     <ColumnDefinition Width="1.2*"/>
                                     <ColumnDefinition Width="225"/>
                                 </Grid.ColumnDefinitions>
                                 <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,0">
-                                    <TextBlock Text="{Binding Name}" FontSize="13.5" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                                    <TextBlock Text="{Binding Name}" Foreground="{StaticResource Text}" FontSize="13.5" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
                                     <TextBlock Text="{Binding Notes}" Foreground="{StaticResource Muted}" FontSize="11" TextTrimming="CharacterEllipsis"/>
                                 </StackPanel>
                                 <Border Grid.Column="1" HorizontalAlignment="Left" VerticalAlignment="Center" Background="{StaticResource PanelAlt}" CornerRadius="4" Padding="7,3">
@@ -159,9 +272,9 @@
                 </ListBox>
             </Grid>
 
-            <!-- VPN VIEW -->
+            <!-- ======================= VPN VIEW ======================= -->
             <ScrollViewer x:Name="VpnView" Grid.Row="1" Margin="20,16" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
-                <StackPanel MaxWidth="720" HorizontalAlignment="Left">
+                <StackPanel MaxWidth="740" HorizontalAlignment="Left">
                     <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="10" Padding="18" Margin="0,0,0,14">
                         <StackPanel>
                             <TextBlock Text="OPENVPN (.ovpn) - BUILT-IN PORTABLE ENGINE" Foreground="{StaticResource Accent}" FontSize="12" FontWeight="SemiBold"/>
@@ -192,7 +305,7 @@
 
                     <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="10" Padding="18">
                         <StackPanel>
-                            <TextBlock Text="CURRENT PUBLIC IP &amp; TIMEZONE CHECK" Foreground="{StaticResource Accent}" FontSize="12" FontWeight="SemiBold"/>
+                            <TextBlock Text="CURRENT PUBLIC IP, LOCATION &amp; TIMEZONE CHECK" Foreground="{StaticResource Accent}" FontSize="12" FontWeight="SemiBold"/>
                             <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
                                 <Button Style="{StaticResource AccentButton}" Content="Check IP &amp; Timezone Now" Click="BtnCheckGlobalIp_Click"/>
                                 <TextBlock x:Name="GlobalIpText" Text="Click to check active VPN IP &amp; Timezone" Foreground="{StaticResource Muted}" FontSize="12.5" VerticalAlignment="Center" Margin="14,0,0,0"/>
@@ -205,7 +318,7 @@
             <!-- Status Bar -->
             <Border Grid.Row="2" Background="{StaticResource Surface}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0">
                 <Grid Margin="16,0">
-                    <TextBlock x:Name="StatusText" Text="Ready - Click 'Run' on any profile to open its isolated Chromium browser window." FontSize="11" Foreground="{StaticResource Muted}" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="StatusText" Text="MH Advanced Tool ready - Select an application from the grid." FontSize="11" Foreground="{StaticResource Muted}" VerticalAlignment="Center"/>
                 </Grid>
             </Border>
         </Grid>

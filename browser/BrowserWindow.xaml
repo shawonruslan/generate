@@ -3,18 +3,70 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="MH Browser" Icon="pack://application:,,,/app.ico"
         Width="1280" Height="820" MinWidth="900" MinHeight="600"
+        WindowStyle="None" ResizeMode="CanResize" AllowsTransparency="False"
         Background="{StaticResource Bg}" Foreground="{StaticResource Text}"
-        FontFamily="Segoe UI" KeyDown="Window_KeyDown">
-    <Grid>
+        FontFamily="Segoe UI" KeyDown="Window_KeyDown" StateChanged="Window_StateChanged">
+    <WindowChrome.WindowChrome>
+        <WindowChrome CaptionHeight="38" ResizeBorderThickness="6" GlassFrameThickness="0" CornerRadius="0"/>
+    </WindowChrome.WindowChrome>
+
+    <Grid x:Name="RootGrid" Background="{StaticResource Bg}">
         <Grid.RowDefinitions>
-            <RowDefinition Height="40"/>
-            <RowDefinition Height="44"/>
+            <RowDefinition Height="38"/>
+            <RowDefinition Height="42"/>
             <RowDefinition Height="*"/>
-            <RowDefinition Height="24"/>
+            <RowDefinition Height="22"/>
         </Grid.RowDefinitions>
 
-        <!-- ======================= TAB BAR ======================= -->
-        <Border Grid.Row="0" Background="{StaticResource Bg}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1">
+        <!-- ======================= UNIFIED CHROME/BRAVE TAB TITLEBAR ======================= -->
+        <Grid Grid.Row="0" Background="{StaticResource Bg}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- Compact Profile Badge -->
+            <Border Grid.Column="0" Background="#FF24200E" BorderBrush="{StaticResource Accent}" BorderThickness="1"
+                    CornerRadius="4" Padding="7,2" Margin="8,0,6,0" VerticalAlignment="Center"
+                    WindowChrome.IsHitTestVisibleInChrome="True">
+                <TextBlock x:Name="ProfileBadgeText" Text="Profile" Foreground="{StaticResource Accent}" FontSize="11" FontWeight="SemiBold"/>
+            </Border>
+
+            <!-- Tabs + Inline New Tab Button -->
+            <ScrollViewer Grid.Column="1" HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled"
+                          VerticalAlignment="Bottom" Margin="0,0,8,0">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Bottom">
+                    <StackPanel x:Name="TabsPanel" Orientation="Horizontal" VerticalAlignment="Bottom"/>
+                    <Button Style="{StaticResource ToolbarIconButton}" Width="28" Height="28" Margin="4,0,0,4"
+                            Click="BtnNewTab_Click" ToolTip="New Tab (Ctrl+T)"
+                            WindowChrome.IsHitTestVisibleInChrome="True">
+                        <Path Style="{StaticResource IconPath}" Data="{StaticResource IconPlus}" Fill="{StaticResource Muted}" Width="12" Height="12"/>
+                    </Button>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- Right Status Pills + Native-Style Window Controls -->
+            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Stretch">
+                <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                        CornerRadius="4" Padding="6,2" Margin="0,0,5,0" VerticalAlignment="Center"
+                        WindowChrome.IsHitTestVisibleInChrome="True">
+                    <TextBlock x:Name="ProxyBadgeText" Text="Direct" Foreground="{StaticResource Muted}" FontSize="10.5"/>
+                </Border>
+                <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                        CornerRadius="4" Padding="6,2" Margin="0,0,8,0" VerticalAlignment="Center"
+                        WindowChrome.IsHitTestVisibleInChrome="True">
+                    <TextBlock x:Name="TzBadgeText" Text="TZ: System" Foreground="{StaticResource Green}" FontSize="10.5"/>
+                </Border>
+
+                <Button Style="{StaticResource CaptionButton}" Content="&#x2014;" Click="BtnMin_Click" ToolTip="Minimize"/>
+                <Button x:Name="BtnMaxRestore" Style="{StaticResource CaptionButton}" Content="&#x25A1;" Click="BtnMax_Click" ToolTip="Maximize / Restore"/>
+                <Button Style="{StaticResource CloseCaptionButton}" Content="&#x2715;" Click="BtnClose_Click" ToolTip="Close"/>
+            </StackPanel>
+        </Grid>
+
+        <!-- ======================= BROWSER NAVIGATION & OMNIBOX BAR ======================= -->
+        <Border Grid.Row="1" Background="{StaticResource Panel}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1">
             <Grid Margin="8,0">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
@@ -22,70 +74,45 @@
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
 
-                <!-- Profile Pill Badge -->
-                <Border Grid.Column="0" Background="#FF2A240C" BorderBrush="{StaticResource Accent}" BorderThickness="1"
-                        CornerRadius="5" Padding="8,3" Margin="0,0,8,0" VerticalAlignment="Center">
-                    <TextBlock x:Name="ProfileBadgeText" Text="Profile" Foreground="{StaticResource Accent}" FontSize="11.5" FontWeight="SemiBold"/>
-                </Border>
-
-                <!-- Tabs Strip -->
-                <ScrollViewer Grid.Column="1" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
-                    <StackPanel x:Name="TabsPanel" Orientation="Horizontal" VerticalAlignment="Center"/>
-                </ScrollViewer>
-
-                <!-- New Tab + Info Badges -->
-                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="8,0,0,0">
-                    <Button Style="{StaticResource FlatButton}" Padding="8,3" Click="BtnNewTab_Click" ToolTip="New Tab (Ctrl+T)">
-                        <Path Style="{StaticResource IconPath}" Data="{StaticResource IconPlus}" Fill="{StaticResource Accent}" Width="13" Height="13"/>
-                    </Button>
-                    <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
-                            CornerRadius="5" Padding="7,3" Margin="8,0,0,0" VerticalAlignment="Center">
-                        <TextBlock x:Name="ProxyBadgeText" Text="Direct" Foreground="{StaticResource Muted}" FontSize="11"/>
-                    </Border>
-                    <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
-                            CornerRadius="5" Padding="7,3" Margin="6,0,0,0" VerticalAlignment="Center">
-                        <TextBlock x:Name="TzBadgeText" Text="TZ: System" Foreground="{StaticResource Green}" FontSize="11"/>
-                    </Border>
-                </StackPanel>
-            </Grid>
-        </Border>
-
-        <!-- ======================= TOOLBAR ======================= -->
-        <Border Grid.Row="1" Background="{StaticResource Surface}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1">
-            <Grid Margin="10,0">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-
                 <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                    <Button Style="{StaticResource FlatButton}" Width="32" Height="30" Padding="0" Click="BtnBack_Click" ToolTip="Back">
+                    <Button Style="{StaticResource ToolbarIconButton}" Click="BtnBack_Click" ToolTip="Back">
                         <Path Style="{StaticResource IconPath}" Data="{StaticResource IconBack}" Width="14" Height="14"/>
                     </Button>
-                    <Button Style="{StaticResource FlatButton}" Width="32" Height="30" Padding="0" Margin="5,0,0,0" Click="BtnForward_Click" ToolTip="Forward">
+                    <Button Style="{StaticResource ToolbarIconButton}" Margin="2,0,0,0" Click="BtnForward_Click" ToolTip="Forward">
                         <Path Style="{StaticResource IconPath}" Data="{StaticResource IconForward}" Width="14" Height="14"/>
                     </Button>
-                    <Button Style="{StaticResource FlatButton}" Width="32" Height="30" Padding="0" Margin="5,0,0,0" Click="BtnReload_Click" ToolTip="Reload (F5)">
+                    <Button Style="{StaticResource ToolbarIconButton}" Margin="2,0,0,0" Click="BtnReload_Click" ToolTip="Reload (F5)">
                         <Path Style="{StaticResource IconPath}" Data="{StaticResource IconReload}" Width="14" Height="14"/>
                     </Button>
-                    <Button Style="{StaticResource FlatButton}" Width="32" Height="30" Padding="0" Margin="5,0,0,0" Click="BtnHome_Click" ToolTip="Profile Home">
-                        <Path Style="{StaticResource IconPath}" Data="{StaticResource IconHome}" Fill="{StaticResource Accent}" Width="14" Height="14"/>
+                    <Button Style="{StaticResource ToolbarIconButton}" Margin="2,0,0,0" Click="BtnHome_Click" ToolTip="Home">
+                        <Path Style="{StaticResource IconPath}" Data="{StaticResource IconHome}" Fill="{StaticResource Muted}" Width="14" Height="14"/>
                     </Button>
                 </StackPanel>
 
-                <TextBox x:Name="UrlBox" Grid.Column="1" Style="{StaticResource DarkTextBox}" Margin="10,6"
-                         KeyDown="UrlBox_KeyDown" GotKeyboardFocus="UrlBox_GotFocus"/>
+                <!-- Rounded Pill Omnibox -->
+                <Border Grid.Column="1" Background="{StaticResource Bg}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                        CornerRadius="15" Height="30" Margin="10,0" Padding="10,0">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Path Grid.Column="0" Style="{StaticResource IconPath}" Data="{StaticResource IconLock}" Fill="{StaticResource Green}" Width="11" Height="11" Margin="0,0,8,0"/>
+                        <TextBox x:Name="UrlBox" Grid.Column="1" Background="Transparent" Foreground="{StaticResource Text}"
+                                 CaretBrush="{StaticResource Accent}" BorderThickness="0" FontSize="12.5" VerticalContentAlignment="Center"
+                                 KeyDown="UrlBox_KeyDown" GotKeyboardFocus="UrlBox_GotFocus"/>
+                    </Grid>
+                </Border>
 
                 <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-                    <Button Style="{StaticResource FlatButton}" Padding="9,5" Click="BtnWebcamTest_Click" ToolTip="Open Webcam Test">
-                        <TextBlock Text="Cam Test" FontSize="11.5"/>
+                    <Button Style="{StaticResource FlatButton}" Padding="9,4" FontSize="11.5" Click="BtnWebcamTest_Click" ToolTip="Open Webcam Test">
+                        <TextBlock Text="Cam Test" Foreground="{StaticResource Text}"/>
                     </Button>
-                    <Button Style="{StaticResource FlatButton}" Padding="9,5" Margin="6,0,0,0" Click="BtnWhoer_Click" ToolTip="Check IP, UA &amp; Timezone">
-                        <TextBlock Text="Check IP" FontSize="11.5"/>
+                    <Button Style="{StaticResource FlatButton}" Padding="9,4" FontSize="11.5" Margin="5,0,0,0" Click="BtnWhoer_Click" ToolTip="Check IP, Fingerprint &amp; Timezone">
+                        <TextBlock Text="Check IP" Foreground="{StaticResource Text}"/>
                     </Button>
-                    <Button Style="{StaticResource FlatButton}" Padding="9,5" Margin="6,0,0,0" Click="BtnDevTools_Click" ToolTip="DevTools (F12)">
-                        <TextBlock Text="DevTools" FontSize="11.5"/>
+                    <Button Style="{StaticResource FlatButton}" Padding="9,4" FontSize="11.5" Margin="5,0,0,0" Click="BtnDevTools_Click" ToolTip="DevTools (F12)">
+                        <TextBlock Text="DevTools" Foreground="{StaticResource Text}"/>
                     </Button>
                 </StackPanel>
             </Grid>
@@ -97,8 +124,8 @@
         <!-- ======================= STATUS BAR ======================= -->
         <Border Grid.Row="3" Background="{StaticResource Surface}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0">
             <Grid Margin="10,0">
-                <TextBlock x:Name="StatusText" Text="Initializing Chromium profile..." FontSize="11" Foreground="{StaticResource Muted}" VerticalAlignment="Center"/>
-                <TextBlock x:Name="UaStatusText" Text="" FontSize="11" Foreground="{StaticResource Muted}" HorizontalAlignment="Right" VerticalAlignment="Center" MaxWidth="460" TextTrimming="CharacterEllipsis"/>
+                <TextBlock x:Name="StatusText" Text="Initializing Chromium profile..." FontSize="10.5" Foreground="{StaticResource Muted}" VerticalAlignment="Center"/>
+                <TextBlock x:Name="UaStatusText" Text="" FontSize="10.5" Foreground="{StaticResource Muted}" HorizontalAlignment="Right" VerticalAlignment="Center" MaxWidth="520" TextTrimming="CharacterEllipsis"/>
             </Grid>
         </Border>
     </Grid>

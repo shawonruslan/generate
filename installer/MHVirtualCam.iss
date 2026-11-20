@@ -1,19 +1,20 @@
-#define MyAppName "MH Virtualcam"
-#define MyAppVersion "2.0.0"
+#define MyAppName "MH Advanced Tool"
+#define MyAppVersion "3.0.0"
 #define MyAppExeName "MHVirtualCam.exe"
+#define MyHubExeName "browser\MHBrowser.exe"
 
 [Setup]
 AppId={{D4E8A120-7F3B-4C9E-8A12-5B6E9D0C3A41}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
-AppPublisher=MH Virtualcam
+AppPublisher=MH Advanced Tool
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
 OutputDir=..\dist
-OutputBaseFilename=MH-Virtualcam-Setup
+OutputBaseFilename=MH-Advanced-Tool-Setup
 SetupIconFile=..\app\app.ico
-UninstallDisplayIcon={app}\{#MyAppExeName}
+UninstallDisplayIcon={app}\{#MyHubExeName}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -42,11 +43,11 @@ Source: "..\vpn\openvpn\*"; DestDir: "{app}\vpn\openvpn"; Flags: ignoreversion r
 Source: "..\vpn\wireguard\*"; DestDir: "{app}\vpn\wireguard"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyHubExeName}"
+Name: "{group}\MH Virtual Camera"; Filename: "{app}\{#MyAppExeName}"
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
-Name: "{group}\MH Browser"; Filename: "{app}\browser\MHBrowser.exe"
-Name: "{autodesktop}\MH Browser"; Filename: "{app}\browser\MHBrowser.exe"; Tasks: desktopicon
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyHubExeName}"; Tasks: desktopicon
+Name: "{autodesktop}\MH Virtual Camera"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
 Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\MHVirtualCam"" /grant ""*S-1-5-32-545:(OI)(CI)M"" /grant ""*S-1-5-19:(OI)(CI)R"""; StatusMsg: "Configuring shared frame folder permissions..."; Flags: runhidden waituntilterminated
@@ -54,7 +55,7 @@ Filename: "{sys}\regsvr32.exe"; Parameters: "/s ""{app}\filter\x64\MHVirtualCamF
 Filename: "{syswow64}\regsvr32.exe"; Parameters: "/s ""{app}\filter\x86\MHVirtualCamFilter.dll"""; StatusMsg: "Registering 32-bit DirectShow filter..."; Flags: runhidden waituntilterminated
 Filename: "{sys}\regsvr32.exe"; Parameters: "/s ""{app}\mf\MHVirtualCamMF.dll"""; StatusMsg: "Registering Windows 11 Media Foundation source..."; Flags: runhidden waituntilterminated
 Filename: "{app}\mf\MHVirtualCamReg.exe"; Parameters: "--install"; StatusMsg: "Registering Windows 11 Virtual Camera..."; Flags: runhidden waituntilterminated
-Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyHubExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
 Filename: "{app}\mf\MHVirtualCamReg.exe"; Parameters: "--uninstall"; StatusMsg: "Removing Windows 11 Virtual Camera..."; Flags: runhidden waituntilterminated; RunOnceId: "UnregMFVCam"

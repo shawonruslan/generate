@@ -1,8 +1,10 @@
 using Microsoft.Win32;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
 
 namespace MHBrowser;
 
@@ -18,6 +20,7 @@ public partial class MainWindow : Window
         foreach (var p in ProfileStore.Load()) _allProfiles.Add(p);
         ProfilesList.ItemsSource = _filteredProfiles;
         RefreshFilter();
+        SetActiveView("Apps");
     }
 
     protected override void OnSourceInitialized(EventArgs e)
@@ -45,22 +48,83 @@ public partial class MainWindow : Window
 
     private void SearchBox_TextChanged(object sender, TextChangedEventArgs e) => RefreshFilter();
 
-    private void NavProfiles_Click(object sender, RoutedEventArgs e)
+    private void SetActiveView(string view)
     {
-        ProfilesView.Visibility = Visibility.Visible;
-        VpnView.Visibility = Visibility.Collapsed;
-        PageTitleText.Text = "Browser Profiles";
-        SearchBox.Visibility = Visibility.Visible;
-        BtnCreateProfile.Visibility = Visibility.Visible;
+        AppsView.Visibility = view == "Apps" ? Visibility.Visible : Visibility.Collapsed;
+        ProfilesView.Visibility = view == "Profiles" ? Visibility.Visible : Visibility.Collapsed;
+        VpnView.Visibility = view == "Vpn" ? Visibility.Visible : Visibility.Collapsed;
+
+        SearchBox.Visibility = view == "Profiles" ? Visibility.Visible : Visibility.Collapsed;
+        BtnCreateProfile.Visibility = view == "Profiles" ? Visibility.Visible : Visibility.Collapsed;
+
+        PageTitleText.Text = view switch
+        {
+            "Profiles" => "Antidetect Browser Profiles",
+            "Vpn" => "VPN Manager (OpenVPN / WireGuard)",
+            _ => "Applications"
+        };
+
+        var panelBrush = (Brush)FindResource("Panel");
+        var transparent = Brushes.Transparent;
+        NavApps.Background = view == "Apps" ? panelBrush : transparent;
+        NavProfiles.Background = view == "Profiles" ? panelBrush : transparent;
+        NavVpn.Background = view == "Vpn" ? panelBrush : transparent;
     }
 
-    private void NavVpn_Click(object sender, RoutedEventArgs e)
+    private void NavApps_Click(object sender, RoutedEventArgs e) => SetActiveView("Apps");
+    private void NavProfiles_Click(object sender, RoutedEventArgs e) => SetActiveView("Profiles");
+    private void NavVpn_Click(object sender, RoutedEventArgs e) => SetActiveView("Vpn");
+
+    private void BtnLaunchVirtualCam_Click(object sender, RoutedEventArgs e)
     {
-        ProfilesView.Visibility = Visibility.Collapsed;
-        VpnView.Visibility = Visibility.Visible;
-        PageTitleText.Text = "VPN Manager (OpenVPN / WireGuard)";
-        SearchBox.Visibility = Visibility.Collapsed;
-        BtnCreateProfile.Visibility = Visibility.Collapsed;
+        string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+        string[] candidates =
+        {
+            Path.GetFullPath(Path.Combine(baseDir, "..", "MHVirtualCam.exe")),
+            Path.Combine(baseDir, "MHVirtualCam.exe")
+        };
+        var exe = candidates.FirstOrDefault(File.Exists);
+        if (exe is null)
+        {
+            MessageBox.Show(this, "MHVirtualCam.exe was not found in the installation folder.", "MH Advanced Tool",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        try
+        {
+            Process.Start(new ProcessStartInfo { FileName = exe, WorkingDirectory = Path.GetDirectoryName(exe) ?? baseDir, UseShellExecute = true });
+            StatusText.Text = "Launched MH Virtual Camera.";
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Could not launch MH Virtual Camera: {ex.Message}";
+        }
+    }
+
+    private void BtnQuickLaunchBrowser_Click(object sender, RoutedEventArgs e)
+    {
+        if (_allProfiles.Count == 0)
+        {
+            var def = new BrowserProfile { Name = "Default Desktop", Notes = "Windows 11 Chrome + HD USB Webcam" };
+            _allProfiles.Add(def);
+            ProfileStore.Save(_allProfiles);
+            RefreshFilter();
+        }
+        LaunchProfile(_allProfiles[0]);
+    }
+
+    private void LaunchProfile(BrowserProfile profile)
+    {
+        if (_openWindows.TryGetValue(profile.Id, out var existing) && existing.IsLoaded)
+        {
+            existing.Activate();
+            return;
+        }
+        var win = new BrowserWindow(profile);
+        win.Closed += (_, _) => _openWindows.Remove(profile.Id);
+        _openWindows[profile.Id] = win;
+        win.Show();
+        StatusText.Text = $"Launched isolated Chromium window for '{profile.Name}'";
     }
 
     private void BtnCreateProfile_Click(object sender, RoutedEventArgs e)
@@ -72,6 +136,7 @@ public partial class MainWindow : Window
             _allProfiles.Add(p);
             ProfileStore.Save(_allProfiles);
             RefreshFilter();
+            SetActiveView("Profiles");
             StatusText.Text = $"Created profile: {p.Name}";
         }
     }
@@ -79,16 +144,7 @@ public partial class MainWindow : Window
     private void BtnRunProfile_Click(object sender, RoutedEventArgs e)
     {
         if ((sender as Button)?.Tag is not BrowserProfile profile) return;
-        if (_openWindows.TryGetValue(profile.Id, out var existing) && existing.IsLoaded)
-        {
-            existing.Activate();
-            return;
-        }
-        var win = new BrowserWindow(profile);
-        win.Closed += (_, _) => _openWindows.Remove(profile.Id);
-        _openWindows[profile.Id] = win;
-        win.Show();
-        StatusText.Text = $"Launched isolated Chromium window for '{profile.Name}'";
+        LaunchProfile(profile);
     }
 
     private void BtnEditProfile_Click(object sender, RoutedEventArgs e)
@@ -167,7 +223,7 @@ public partial class MainWindow : Window
     private async void BtnCheckGlobalIp_Click(object sender, RoutedEventArgs e)
     {
         GlobalIpText.Text = "Checking IP & Timezone...";
-        var (ok, ip, loc, tz) = await IpTimezoneDetector.DetectAsync(null);
-        GlobalIpText.Text = ok ? $"IP: {ip}  |  {loc}  |  Timezone: {tz}" : "Could not detect IP/Timezone.";
+        var (ok, ip, loc, tz, lat, lon) = await IpTimezoneDetector.DetectAsync(null);
+        GlobalIpText.Text = ok ? $"IP: {ip}  |  {loc}  |  TZ: {tz}  |  Geo: {lat:F2}, {lon:F2}" : "Could not detect IP/Timezone.";
     }
 }
