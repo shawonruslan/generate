@@ -195,22 +195,29 @@ public static class ProfileStore
 
 public static class IpTimezoneDetector
 {
-    public static async Task<(bool Ok, string Ip, string Location, string Timezone, double Lat, double Lon)> DetectAsync(BrowserProfile? profile)
+    public static async Task<(bool Ok, string Ip, string Location, string Timezone, double Lat, double Lon)> DetectAsync(
+        BrowserProfile? profile, int localSocksPort = 0)
     {
         try
         {
             var handler = new HttpClientHandler();
-            if (profile is not null && !string.IsNullOrWhiteSpace(profile.ProxyHost) && !string.IsNullOrWhiteSpace(profile.ProxyPort) &&
-                profile.ProxyType is "HTTP" or "HTTPS")
+            if (localSocksPort > 0)
             {
-                var proxy = new WebProxy($"http://{profile.ProxyHost}:{profile.ProxyPort}");
+                handler.Proxy = new WebProxy($"socks5://127.0.0.1:{localSocksPort}");
+                handler.UseProxy = true;
+            }
+            else if (profile is not null && !string.IsNullOrWhiteSpace(profile.ProxyHost) && !string.IsNullOrWhiteSpace(profile.ProxyPort) &&
+                     profile.ProxyType is "HTTP" or "HTTPS" or "SOCKS5")
+            {
+                string scheme = profile.ProxyType == "SOCKS5" ? "socks5" : "http";
+                var proxy = new WebProxy($"{scheme}://{profile.ProxyHost}:{profile.ProxyPort}");
                 if (!string.IsNullOrWhiteSpace(profile.ProxyUser))
                     proxy.Credentials = new NetworkCredential(profile.ProxyUser, profile.ProxyPass);
                 handler.Proxy = proxy;
                 handler.UseProxy = true;
             }
 
-            using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(6) };
+            using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(10) };
             var json = await client.GetStringAsync("http://ip-api.com/json/?fields=status,query,country,city,timezone,lat,lon");
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
@@ -246,6 +253,16 @@ public static class VpnController
         return paths.FirstOrDefault(File.Exists);
     }
 
+    public static string? FindWireProxy()
+    {
+        string[] paths =
+        {
+            Path.Combine(ExeDir, "vpn", "wireguard", "wireproxy.exe"),
+            Path.GetFullPath(Path.Combine(ExeDir, "..", "vpn", "wireguard", "wireproxy.exe"))
+        };
+        return paths.FirstOrDefault(File.Exists);
+    }
+
     public static string? FindWireGuard()
     {
         string[] paths =
@@ -271,12 +288,12 @@ public static class VpnController
             Process.Start(new ProcessStartInfo
             {
                 FileName = exe,
-                Arguments = $"--windows-driver wintun --config \"{dst}\"",
+                Arguments = $"--windows-driver wintun --data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305:AES-128-CBC:AES-256-CBC:BF-CBC --data-ciphers-fallback AES-128-CBC --config \"{dst}\"",
                 WorkingDirectory = Path.GetDirectoryName(exe) ?? ExeDir,
-                UseShellExecute = true,
-                Verb = "runas"
+                UseShellExecute = false,
+                CreateNoWindow = true
             });
-            return (true, $"OpenVPN connecting: {Path.GetFileName(ovpnFile)}");
+            return (true, $"System OpenVPN connecting silently: {Path.GetFileName(ovpnFile)}");
         }
         catch (Exception ex) { return (false, $"OpenVPN launch failed: {ex.Message}"); }
     }
@@ -289,9 +306,8 @@ public static class VpnController
             {
                 FileName = "taskkill.exe",
                 Arguments = "/F /IM openvpn.exe",
-                UseShellExecute = true,
-                Verb = "runas",
-                WindowStyle = ProcessWindowStyle.Hidden
+                UseShellExecute = false,
+                CreateNoWindow = true
             });
             return (true, "OpenVPN disconnected.");
         }
@@ -313,11 +329,10 @@ public static class VpnController
                 FileName = exe,
                 Arguments = $"/installtunnelservice \"{dst}\"",
                 WorkingDirectory = Path.GetDirectoryName(exe) ?? ExeDir,
-                UseShellExecute = true,
-                Verb = "runas",
-                WindowStyle = ProcessWindowStyle.Hidden
+                UseShellExecute = false,
+                CreateNoWindow = true
             });
-            return (true, $"WireGuard tunnel activated: {Path.GetFileName(confFile)}");
+            return (true, $"System WireGuard tunnel activated: {Path.GetFileName(confFile)}");
         }
         catch (Exception ex) { return (false, $"WireGuard failed: {ex.Message}"); }
     }
@@ -332,9 +347,8 @@ public static class VpnController
             {
                 FileName = exe,
                 Arguments = "/uninstalltunnelservice mhbrowser_wg",
-                UseShellExecute = true,
-                Verb = "runas",
-                WindowStyle = ProcessWindowStyle.Hidden
+                UseShellExecute = false,
+                CreateNoWindow = true
             });
             return (true, "WireGuard tunnel disconnected.");
         }

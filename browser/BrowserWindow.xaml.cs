@@ -23,6 +23,8 @@ public partial class BrowserWindow : Window
     private readonly List<TabState> _tabs = new();
     private int _activeIndex = -1;
     private CoreWebView2Environment? _env;
+    private ProfileVpnSession? _vpnSession;
+    private int _localVpnSocksPort;
     private string _activeTimezone = "";
     private double _geoLat;
     private double _geoLon;
@@ -47,6 +49,8 @@ public partial class BrowserWindow : Window
             try { t.WebView.Dispose(); } catch { }
         }
         _tabs.Clear();
+        try { _vpnSession?.Dispose(); } catch { }
+        _vpnSession = null;
         _profile.IsRunning = false;
         base.OnClosed(e);
     }
@@ -68,28 +72,38 @@ public partial class BrowserWindow : Window
         {
             _profile.IsRunning = true;
 
-            // Auto-connect per-profile OpenVPN / WireGuard if configured
-            if (_profile.ProxyType == "OpenVPN" && !string.IsNullOrWhiteSpace(_profile.VpnConfigPath))
+            // 1) Start isolated per-profile OpenVPN / WireGuard tunnel (ZERO CMD window, PC IP untouched!)
+            if (_profile.ProxyType is "OpenVPN" or "WireGuard")
             {
-                StatusText.Text = $"Starting OpenVPN ({Path.GetFileName(_profile.VpnConfigPath)})...";
-                var (ok, msg) = VpnController.ConnectOpenVpn(_profile.VpnConfigPath);
+                _vpnSession = new ProfileVpnSession();
+                var (ok, port, msg) = await _vpnSession.StartAsync(
+                    _profile.Id,
+                    _profile.ProxyType,
+                    _profile.VpnConfigPath,
+                    status => Dispatcher.BeginInvoke(() => StatusText.Text = status));
+
+                if (!ok)
+                {
+                    StatusText.Text = msg;
+                    ProxyBadgeText.Text = $"{_profile.ProxyType}: Failed";
+                    MessageBox.Show(this,
+                        $"Could not connect isolated {_profile.ProxyType} tunnel:\n\n{msg}",
+                        "MH Advanced Tool - Profile VPN", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    Close();
+                    return;
+                }
+
+                _localVpnSocksPort = port;
+                ProxyBadgeText.Text = $"{_profile.ProxyType} (Isolated)";
                 StatusText.Text = msg;
-                if (ok) await Task.Delay(3000);
-            }
-            else if (_profile.ProxyType == "WireGuard" && !string.IsNullOrWhiteSpace(_profile.VpnConfigPath))
-            {
-                StatusText.Text = $"Activating WireGuard ({Path.GetFileName(_profile.VpnConfigPath)})...";
-                var (ok, msg) = VpnController.ConnectWireGuard(_profile.VpnConfigPath);
-                StatusText.Text = msg;
-                if (ok) await Task.Delay(2500);
             }
 
-            // Auto-detect timezone & geolocation from active VPN / Proxy IP if enabled
+            // 2) Auto-detect timezone & geolocation through the profile's proxy OR isolated VPN SOCKS5 port
             _activeTimezone = _profile.Timezone;
             if (_profile.AutoTimezone || _profile.AutoGeolocation)
             {
-                StatusText.Text = "Detecting IP, Timezone & Geolocation...";
-                var (ok, ip, loc, tz, lat, lon) = await IpTimezoneDetector.DetectAsync(_profile);
+                StatusText.Text = "Detecting profile exit IP, Timezone & Geolocation...";
+                var (ok, ip, loc, tz, lat, lon) = await IpTimezoneDetector.DetectAsync(_profile, _localVpnSocksPort);
                 if (ok)
                 {
                     if (_profile.AutoTimezone)
@@ -104,19 +118,25 @@ public partial class BrowserWindow : Window
                         _hasGeo = true;
                     }
                     _profile.NotifyAll();
-                    StatusText.Text = $"IP: {ip} ({loc}) | TZ: {_activeTimezone}";
+                    StatusText.Text = $"Profile IP: {ip} ({loc}) | TZ: {_activeTimezone}";
                 }
             }
             TzBadgeText.Text = string.IsNullOrWhiteSpace(_activeTimezone) ? "TZ: System" : $"TZ: {_activeTimezone}";
 
-            // Build isolated Chromium environment per profile
+            // 3) Build isolated Chromium environment per profile
             var args = new List<string>
             {
                 $"--lang={_profile.Language}",
                 "--disable-blink-features=AutomationControlled"
             };
-            if (_profile.ProxyType is "HTTP" or "HTTPS" or "SOCKS5" &&
-                !string.IsNullOrWhiteSpace(_profile.ProxyHost) && !string.IsNullOrWhiteSpace(_profile.ProxyPort))
+            if (_localVpnSocksPort > 0)
+            {
+                // Route ONLY this browser profile through its isolated local VPN SOCKS5 tunnel!
+                args.Add($"--proxy-server=\"socks5://127.0.0.1:{_localVpnSocksPort}\"");
+                args.Add("--host-resolver-rules=\"MAP * ~NOTFOUND , EXCLUDE 127.0.0.1\"");
+            }
+            else if (_profile.ProxyType is "HTTP" or "HTTPS" or "SOCKS5" &&
+                     !string.IsNullOrWhiteSpace(_profile.ProxyHost) && !string.IsNullOrWhiteSpace(_profile.ProxyPort))
             {
                 string scheme = _profile.ProxyType switch
                 {

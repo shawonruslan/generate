@@ -91,10 +91,10 @@ jobs:
           dotnet publish browser\MHBrowser.csproj -c Release -r win-x64 -p:PlatformTarget=x64 --self-contained true -o publish_browser
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Bundle Portable OpenVPN & WireGuard (No Separate Install Needed)
+      - name: Bundle Portable OpenVPN, Wintun & Userspace WireGuard (wireproxy)
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path "vpn\openvpn", "vpn\wireguard", "C:\vpn-tmp\ovpn", "C:\vpn-tmp\wg" | Out-Null
+          New-Item -ItemType Directory -Force -Path "vpn\openvpn", "vpn\wireguard", "C:\vpn-tmp\ovpn", "C:\vpn-tmp\wg", "C:\vpn-tmp\wp" | Out-Null
 
           # 1) Official OpenVPN 2.6.17 x64 binaries + wintun.dll
           Invoke-WebRequest -Uri "https://swupdate.openvpn.org/community/releases/OpenVPN-2.6.17-I001-amd64.msi" -OutFile "C:\vpn-tmp\openvpn.msi"
@@ -109,7 +109,29 @@ jobs:
             Copy-Item "C:\vpn-tmp\wintun\wintun\bin\amd64\wintun.dll" "vpn\openvpn\wintun.dll" -Force
           }
 
-          # 2) Official WireGuard x64 binaries (wireguard.exe + tunnel.dll + wintun.dll)
+          # 2) Userspace WireGuard SOCKS5 proxy (wireproxy.exe) for per-profile isolated WireGuard
+          try {
+            $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/windtf/wireproxy/releases/latest" -Headers @{ "User-Agent" = "MHAdvancedTool-CI" }
+            $asset = $rel.assets | Where-Object { $_.name -like "*windows*amd64*" } | Select-Object -First 1
+            if ($asset) {
+              $outArc = "C:\vpn-tmp\wp\$($asset.name)"
+              Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $outArc
+              if ($asset.name -like "*.zip") {
+                Expand-Archive -Path $outArc -DestinationPath "C:\vpn-tmp\wp\out" -Force
+              } else {
+                New-Item -ItemType Directory -Force -Path "C:\vpn-tmp\wp\out" | Out-Null
+                tar -xzf $outArc -C "C:\vpn-tmp\wp\out"
+              }
+              $wpExe = Get-ChildItem -Path "C:\vpn-tmp\wp\out" -Recurse -Filter "wireproxy.exe" | Select-Object -First 1
+              if ($wpExe) {
+                Copy-Item $wpExe.FullName "vpn\wireguard\wireproxy.exe" -Force
+              }
+            }
+          } catch {
+            Write-Warning "wireproxy bundle skipped: $_"
+          }
+
+          # 3) Official WireGuard x64 binaries (optional system-wide fallback)
           try {
             Invoke-WebRequest -Uri "https://download.wireguard.com/windows-client/wireguard-amd64-0.5.3.msi" -OutFile "C:\vpn-tmp\wireguard.msi"
             Start-Process msiexec.exe -ArgumentList "/a C:\vpn-tmp\wireguard.msi /qn TARGETDIR=C:\vpn-tmp\wg" -Wait
@@ -118,7 +140,7 @@ jobs:
               Copy-Item "$($wgBin.DirectoryName)\*" "vpn\wireguard\" -Recurse -Force
             }
           } catch {
-            Write-Warning "WireGuard bundle skipped: $_"
+            Write-Warning "WireGuard MSI bundle skipped: $_"
           }
 
       - name: Build EXE Installer with Inno Setup
