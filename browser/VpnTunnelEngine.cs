@@ -569,3 +569,166 @@ public sealed class ProfileVpnSession : IDisposable
         }
     }
 }
+
+
+/// <summary>
+/// Local no-auth SOCKS5 forwarder that bridges Chromium (which does not support SOCKS5 username/password auth)
+/// to any upstream authenticated or unauthenticated SOCKS5 proxy using RFC 1929 auth.
+/// </summary>
+public sealed class LocalSocks5AuthForwarder : IDisposable
+{
+    private readonly string _upHost;
+    private readonly int _upPort;
+    private readonly string _user;
+    private readonly string _pass;
+    private readonly TcpListener _listener;
+    private readonly CancellationTokenSource _cts = new();
+
+    public int Port { get; }
+
+    public LocalSocks5AuthForwarder(string upstreamHost, int upstreamPort, string username, string password)
+    {
+        _upHost = upstreamHost;
+        _upPort = upstreamPort;
+        _user = username ?? "";
+        _pass = password ?? "";
+        _listener = new TcpListener(IPAddress.Loopback, 0);
+        _listener.Start();
+        Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
+        _ = Task.Run(() => AcceptLoopAsync(_cts.Token));
+    }
+
+    private async Task AcceptLoopAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                var client = await _listener.AcceptTcpClientAsync(ct);
+                client.NoDelay = true;
+                _ = Task.Run(() => HandleClientAsync(client, ct), ct);
+            }
+            catch { break; }
+        }
+    }
+
+    private async Task HandleClientAsync(TcpClient client, CancellationToken ct)
+    {
+        using (client)
+        {
+            try
+            {
+                var cStream = client.GetStream();
+                byte[] hdr = new byte[2];
+                if (!await ReadExactAsync(cStream, hdr, 0, 2, ct) || hdr[0] != 0x05) return;
+                byte[] methods = new byte[hdr[1]];
+                if (!await ReadExactAsync(cStream, methods, 0, methods.Length, ct)) return;
+
+                // Accept local Chromium with NO AUTH
+                await cStream.WriteAsync(new byte[] { 0x05, 0x00 }, ct);
+
+                // Read client CONNECT request completely
+                byte[] reqHdr = new byte[4];
+                if (!await ReadExactAsync(cStream, reqHdr, 0, 4, ct)) return;
+                using var reqMs = new MemoryStream();
+                reqMs.Write(reqHdr);
+                byte atyp = reqHdr[3];
+                if (atyp == 0x01)
+                {
+                    byte[] a = new byte[4];
+                    if (!await ReadExactAsync(cStream, a, 0, 4, ct)) return;
+                    reqMs.Write(a);
+                }
+                else if (atyp == 0x03)
+                {
+                    byte[] l = new byte[1];
+                    if (!await ReadExactAsync(cStream, l, 0, 1, ct)) return;
+                    byte[] d = new byte[l[0]];
+                    if (!await ReadExactAsync(cStream, d, 0, d.Length, ct)) return;
+                    reqMs.Write(l);
+                    reqMs.Write(d);
+                }
+                else if (atyp == 0x04)
+                {
+                    byte[] a = new byte[16];
+                    if (!await ReadExactAsync(cStream, a, 0, 16, ct)) return;
+                    reqMs.Write(a);
+                }
+                else return;
+
+                byte[] pBuf = new byte[2];
+                if (!await ReadExactAsync(cStream, pBuf, 0, 2, ct)) return;
+                reqMs.Write(pBuf);
+
+                // Connect to upstream SOCKS5 server
+                using var up = new TcpClient { NoDelay = true };
+                using var connCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                connCts.CancelAfter(TimeSpan.FromSeconds(15));
+                await up.ConnectAsync(_upHost, _upPort, connCts.Token);
+                var uStream = up.GetStream();
+
+                bool hasAuth = !string.IsNullOrEmpty(_user);
+                if (hasAuth)
+                    await uStream.WriteAsync(new byte[] { 0x05, 0x02, 0x00, 0x02 }, connCts.Token);
+                else
+                    await uStream.WriteAsync(new byte[] { 0x05, 0x01, 0x00 }, connCts.Token);
+
+                byte[] upMethod = new byte[2];
+                if (!await ReadExactAsync(uStream, upMethod, 0, 2, connCts.Token) || upMethod[0] != 0x05) return;
+
+                if (upMethod[1] == 0x02) // RFC 1929 Username/Password auth
+                {
+                    byte[] uBytes = Encoding.UTF8.GetBytes(_user);
+                    byte[] pBytes = Encoding.UTF8.GetBytes(_pass);
+                    byte[] authPkt = new byte[3 + uBytes.Length + pBytes.Length];
+                    authPkt[0] = 0x01;
+                    authPkt[1] = (byte)Math.Min(255, uBytes.Length);
+                    Buffer.BlockCopy(uBytes, 0, authPkt, 2, authPkt[1]);
+                    authPkt[2 + authPkt[1]] = (byte)Math.Min(255, pBytes.Length);
+                    Buffer.BlockCopy(pBytes, 0, authPkt, 3 + authPkt[1], authPkt[2 + authPkt[1]]);
+                    await uStream.WriteAsync(authPkt, connCts.Token);
+
+                    byte[] authResp = new byte[2];
+                    if (!await ReadExactAsync(uStream, authResp, 0, 2, connCts.Token) || authResp[1] != 0x00)
+                    {
+                        await cStream.WriteAsync(new byte[] { 0x05, 0x01, 0x00, 0x01, 0, 0, 0, 0, 0, 0 }, ct);
+                        return;
+                    }
+                }
+                else if (upMethod[1] != 0x00)
+                {
+                    await cStream.WriteAsync(new byte[] { 0x05, 0x01, 0x00, 0x01, 0, 0, 0, 0, 0, 0 }, ct);
+                    return;
+                }
+
+                // Forward exact CONNECT request to upstream SOCKS5
+                await uStream.WriteAsync(reqMs.ToArray(), connCts.Token);
+
+                // Relay bidirectional streams (including upstream CONNECT reply straight to client)
+                var t1 = cStream.CopyToAsync(uStream, 16384, ct);
+                var t2 = uStream.CopyToAsync(cStream, 16384, ct);
+                await Task.WhenAny(t1, t2);
+            }
+            catch { }
+        }
+    }
+
+    private static async Task<bool> ReadExactAsync(Stream s, byte[] buf, int offset, int count, CancellationToken ct)
+    {
+        int total = 0;
+        while (total < count)
+        {
+            int n = await s.ReadAsync(buf.AsMemory(offset + total, count - total), ct);
+            if (n <= 0) return false;
+            total += n;
+        }
+        return true;
+    }
+
+    public void Dispose()
+    {
+        try { _cts.Cancel(); } catch { }
+        try { _listener.Stop(); } catch { }
+        _cts.Dispose();
+    }
+}

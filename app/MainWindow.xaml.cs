@@ -106,6 +106,28 @@ public partial class MainWindow : Window
         _hotkeys.ClipHotkeyPressed += idx => Dispatcher.BeginInvoke(() => JumpToClip(idx));
         _hotkeys.Register(hwnd);
         SyncClipHotkeys();
+        StartRemoteCommandWatcher();
+    }
+
+    private System.Windows.Threading.DispatcherTimer? _remoteCmdTimer;
+    private void StartRemoteCommandWatcher()
+    {
+        string cmdFile = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+            "MHVirtualCam", "remote_cmd.txt");
+        _remoteCmdTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
+        _remoteCmdTimer.Tick += (_, _) =>
+        {
+            try
+            {
+                if (!File.Exists(cmdFile)) return;
+                string cmd = File.ReadAllText(cmdFile).Trim();
+                File.Delete(cmdFile);
+                if (!string.IsNullOrEmpty(cmd)) HandleHotkey(cmd);
+            }
+            catch { }
+        };
+        _remoteCmdTimer.Start();
     }
 
     protected override void OnClosed(EventArgs e)

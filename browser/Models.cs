@@ -46,11 +46,45 @@ public static class UaPresets
     };
 }
 
+public sealed class BookmarkItem
+{
+    public string Title { get; set; } = "";
+    public string Url { get; set; } = "";
+}
+
+public sealed class HistoryItem
+{
+    public string Title { get; set; } = "";
+    public string Url { get; set; } = "";
+    public string VisitedAt { get; set; } = "";
+}
+
+public static class SearchEngines
+{
+    public static readonly (string Name, string UrlTemplate)[] All =
+    {
+        ("Google", "https://www.google.com/search?q={0}"),
+        ("DuckDuckGo", "https://duckduckgo.com/?q={0}"),
+        ("Bing", "https://www.bing.com/search?q={0}"),
+        ("Brave Search", "https://search.brave.com/search?q={0}"),
+        ("Yahoo", "https://search.yahoo.com/search?p={0}"),
+        ("Yandex", "https://yandex.com/search/?text={0}")
+    };
+
+    public static string BuildSearchUrl(string engineName, string query)
+    {
+        var match = All.FirstOrDefault(e => e.Name.Equals(engineName, StringComparison.OrdinalIgnoreCase));
+        string tpl = string.IsNullOrEmpty(match.UrlTemplate) ? All[0].UrlTemplate : match.UrlTemplate;
+        return string.Format(tpl, Uri.EscapeDataString(query));
+    }
+}
+
 public sealed class BrowserProfile : INotifyPropertyChanged
 {
     public string Id { get; set; } = Guid.NewGuid().ToString("N")[..12];
     public string Name { get; set; } = "Profile 1";
     public string Notes { get; set; } = "";
+    public string Group { get; set; } = "Default";
     public string ProxyType { get; set; } = "Direct"; // Direct, HTTP, HTTPS, SOCKS5, OpenVPN, WireGuard
     public string ProxyHost { get; set; } = "";
     public string ProxyPort { get; set; } = "";
@@ -76,8 +110,20 @@ public sealed class BrowserProfile : INotifyPropertyChanged
     public bool FingerprintNoise { get; set; } = true;
     public bool WebGlSpoof { get; set; } = true;
     public bool AudioNoise { get; set; } = true;
+    public bool FontMasking { get; set; } = true;
+    public bool ClientRectsNoise { get; set; } = true;
+    public bool WebRtcSpoofPublicIp { get; set; } = true;
+    public bool MediaDeviceSpoof { get; set; } = true;
+    public bool BatteryNetSpoof { get; set; } = true;
+    public bool SpeechPluginsMask { get; set; } = true;
+    public List<string> ExtensionPaths { get; set; } = new();
     public int NoiseSeed { get; set; } = Random.Shared.Next(1, 999999);
     public string StartUrl { get; set; } = "https://whoer.net";
+    public string SearchEngine { get; set; } = "Google";
+    public List<string> SavedTabs { get; set; } = new();
+    public int ActiveTabIndex { get; set; } = 0;
+    public List<BookmarkItem> Bookmarks { get; set; } = new();
+    public List<HistoryItem> History { get; set; } = new();
 
     private bool _isRunning;
     public bool IsRunning
@@ -139,8 +185,17 @@ public sealed class BrowserProfile : INotifyPropertyChanged
         FingerprintNoise = FingerprintNoise,
         WebGlSpoof = WebGlSpoof,
         AudioNoise = AudioNoise,
+        Group = Group,
+        FontMasking = FontMasking,
+        ClientRectsNoise = ClientRectsNoise,
+        WebRtcSpoofPublicIp = WebRtcSpoofPublicIp,
+        MediaDeviceSpoof = MediaDeviceSpoof,
+        BatteryNetSpoof = BatteryNetSpoof,
+        SpeechPluginsMask = SpeechPluginsMask,
+        ExtensionPaths = new List<string>(ExtensionPaths),
         NoiseSeed = Random.Shared.Next(1, 999999),
-        StartUrl = StartUrl
+        StartUrl = StartUrl,
+        SearchEngine = SearchEngine
     };
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -148,6 +203,7 @@ public sealed class BrowserProfile : INotifyPropertyChanged
     {
         OnPropertyChanged(nameof(Name));
         OnPropertyChanged(nameof(Notes));
+        OnPropertyChanged(nameof(Group));
         OnPropertyChanged(nameof(ProxySummary));
         OnPropertyChanged(nameof(DeviceSummary));
         OnPropertyChanged(nameof(TimezoneSummary));
@@ -209,8 +265,12 @@ public static class IpTimezoneDetector
             else if (profile is not null && !string.IsNullOrWhiteSpace(profile.ProxyHost) && !string.IsNullOrWhiteSpace(profile.ProxyPort) &&
                      profile.ProxyType is "HTTP" or "HTTPS" or "SOCKS5")
             {
-                string scheme = profile.ProxyType == "SOCKS5" ? "socks5" : "http";
-                var proxy = new WebProxy($"{scheme}://{profile.ProxyHost}:{profile.ProxyPort}");
+                if (profile.ProxyType == "SOCKS5" && int.TryParse(profile.ProxyPort, out int sp))
+                {
+                    using var fwd = new LocalSocks5AuthForwarder(profile.ProxyHost, sp, profile.ProxyUser, profile.ProxyPass);
+                    return await DetectAsync(null, fwd.Port);
+                }
+                var proxy = new WebProxy($"http://{profile.ProxyHost}:{profile.ProxyPort}");
                 if (!string.IsNullOrWhiteSpace(profile.ProxyUser))
                     proxy.Credentials = new NetworkCredential(profile.ProxyUser, profile.ProxyPass);
                 handler.Proxy = proxy;
