@@ -288,7 +288,7 @@ public static class VpnController
             Process.Start(new ProcessStartInfo
             {
                 FileName = exe,
-                Arguments = $"--windows-driver wintun --data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305:AES-128-CBC:AES-256-CBC:BF-CBC --data-ciphers-fallback AES-128-CBC --config \"{dst}\"",
+                Arguments = $"--windows-driver wintun --data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305:AES-128-CBC:AES-256-CBC --data-ciphers-fallback AES-128-CBC --config \"{dst}\"",
                 WorkingDirectory = Path.GetDirectoryName(exe) ?? ExeDir,
                 UseShellExecute = false,
                 CreateNoWindow = true

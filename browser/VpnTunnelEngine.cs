@@ -364,13 +364,13 @@ public sealed class ProfileVpnSession : IDisposable
                 !trimmed.StartsWith("data-ciphers-fallback", StringComparison.OrdinalIgnoreCase))
             {
                 hasDataCiphers = true;
-                sb.AppendLine("data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305:AES-128-CBC:AES-256-CBC:BF-CBC");
+                sb.AppendLine("data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305:AES-128-CBC:AES-256-CBC");
                 continue;
             }
             sb.AppendLine(raw);
         }
         if (!hasDataCiphers)
-            sb.AppendLine("data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305:AES-128-CBC:AES-256-CBC:BF-CBC");
+            sb.AppendLine("data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305:AES-128-CBC:AES-256-CBC");
         sb.AppendLine("data-ciphers-fallback AES-128-CBC");
 
         _tempConfigPath = Path.Combine(VpnWorkDir, $"ovpn_{profileId}.ovpn");

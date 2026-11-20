@@ -10,7 +10,7 @@
     <Product>MH Advanced Tool</Product>
     <ApplicationIcon>app.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>3.1.1</Version>
+    <Version>3.1.2</Version>
   </PropertyGroup>
   <ItemGroup>
     <Resource Include="app.ico" />
