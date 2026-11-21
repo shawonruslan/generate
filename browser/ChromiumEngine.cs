@@ -527,7 +527,7 @@ public sealed class RealChromiumSession : IDisposable
                     ms.Write(buf, 0, r.Count);
                 } while (!r.EndOfMessage);
                 string txt = Encoding.UTF8.GetString(ms.ToArray());
-                if (txt.Contains(""id":99")) return txt;
+                if (txt.Contains("\"id\":99")) return txt;
             }
         }
         catch { }
@@ -807,7 +807,7 @@ try {{
   host.style.cssText = 'position:fixed;bottom:10px;left:10px;z-index:2147483647;pointer-events:auto;';
   const shadow = host.attachShadow({{ mode: 'closed' }});
   const pill = document.createElement('div');
-  pill.style.cssText = 'display:flex;align-items:center;gap:7px;background:rgba(15,18,25,0.92);color:#F3F5F8;border:1px solid rgba(245,197,24,0.65);border-radius:999px;padding:4px 10px;font:600 11.5px/1.2 "Segoe UI",system-ui,sans-serif;box-shadow:0 4px 14px rgba(0,0,0,0.45);backdrop-filter:blur(6px);user-select:none;cursor:pointer;';
+  pill.style.cssText = 'display:flex;align-items:center;gap:7px;background:rgba(15,18,25,0.92);color:#F3F5F8;border:1px solid rgba(245,197,24,0.65);border-radius:999px;padding:4px 10px;font:600 11.5px/1.2 system-ui,sans-serif;box-shadow:0 4px 14px rgba(0,0,0,0.45);backdrop-filter:blur(6px);user-select:none;cursor:pointer;';
   const dot = document.createElement('span');
   dot.style.cssText = 'width:7px;height:7px;border-radius:50%;background:#22C55E;flex-shrink:0;';
   const lbl = document.createElement('span');
