@@ -121,7 +121,7 @@ public partial class MainWindow : Window
             try
             {
                 if (!File.Exists(cmdFile)) return;
-                string cmd = File.ReadAllText(cmdFile).Trim();
+                string cmd = File.ReadAllText(cmdFile).Trim().Split('|')[0].Trim();
                 File.Delete(cmdFile);
                 if (!string.IsNullOrEmpty(cmd)) HandleHotkey(cmd);
             }
@@ -1028,6 +1028,11 @@ public partial class MainWindow : Window
             case "zoom-in": SetZoom(_engine.Settings.Zoom + 0.25); break;
             case "zoom-out": SetZoom(_engine.Settings.Zoom - 0.25); break;
             case "zoom-reset": SetZoom(1.0); CenterPan(); break;
+            case "pan-up": NudgePan(0, -0.08); break;
+            case "pan-down": NudgePan(0, +0.08); break;
+            case "pan-left": NudgePan(-0.08, 0); break;
+            case "pan-right": NudgePan(+0.08, 0); break;
+            case "pan-center": CenterPan(); break;
             case "loop": BtnLoop_Click(this, new RoutedEventArgs()); break;
         }
     }

@@ -808,3 +808,117 @@ public sealed class LocalSocks5AuthForwarder : IDisposable
         _cts.Dispose();
     }
 }
+
+/// <summary>
+/// Local no-auth HTTP/HTTPS proxy forwarder that bridges Chromium to any authenticated
+/// upstream HTTP/HTTPS proxy by injecting the Proxy-Authorization Basic header transparently,
+/// eliminating Chromium's proxy Sign-in popup completely.
+/// </summary>
+public sealed class LocalHttpProxyAuthForwarder : IDisposable
+{
+    private readonly string _upHost;
+    private readonly int _upPort;
+    private readonly string _authHeader;
+    private readonly TcpListener _listener;
+    private readonly CancellationTokenSource _cts = new();
+
+    public int Port { get; }
+
+    public LocalHttpProxyAuthForwarder(string upstreamHost, int upstreamPort, string username, string password)
+    {
+        _upHost = upstreamHost.Trim();
+        _upPort = upstreamPort;
+        string creds = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{username}:{password}"));
+        _authHeader = $"Proxy-Authorization: Basic {creds}\r\n";
+        _listener = new TcpListener(IPAddress.Loopback, 0);
+        _listener.Start();
+        Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
+        _ = Task.Run(() => AcceptLoopAsync(_cts.Token));
+    }
+
+    private async Task AcceptLoopAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                var client = await _listener.AcceptTcpClientAsync(ct);
+                client.NoDelay = true;
+                _ = Task.Run(() => HandleClientAsync(client, ct), ct);
+            }
+            catch (OperationCanceledException) { break; }
+            catch (ObjectDisposedException) { break; }
+            catch { try { await Task.Delay(50, ct); } catch { break; } }
+        }
+    }
+
+    private async Task HandleClientAsync(TcpClient client, CancellationToken ct)
+    {
+        using (client)
+        {
+            try
+            {
+                var cStream = client.GetStream();
+                // Read initial HTTP request headers up to 
+
+
+                using var hdrMs = new MemoryStream();
+                byte[] buf = new byte[4096];
+                int headerEnd = -1;
+                while (headerEnd < 0 && hdrMs.Length < 65536)
+                {
+                    int n = await cStream.ReadAsync(buf, ct);
+                    if (n <= 0) return;
+                    hdrMs.Write(buf, 0, n);
+                    byte[] arr = hdrMs.ToArray();
+                    headerEnd = FindHeaderEnd(arr);
+                }
+                if (headerEnd < 0) return;
+
+                byte[] allInitial = hdrMs.ToArray();
+                string headerText = Encoding.ASCII.GetString(allInitial, 0, headerEnd);
+                byte[] trailingBody = allInitial.Length > headerEnd + 4
+                    ? allInitial[(headerEnd + 4)..]
+                    : Array.Empty<byte>();
+
+                // Inject Proxy-Authorization header if not already present
+                string modifiedHeaders = headerText.Contains("Proxy-Authorization:", StringComparison.OrdinalIgnoreCase)
+                    ? headerText + "\r\n\r\n"
+                    : headerText + "\r\n" + _authHeader + "\r\n";
+
+                using var upstream = new TcpClient { NoDelay = true };
+                using var connCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                connCts.CancelAfter(TimeSpan.FromSeconds(20));
+                await upstream.ConnectAsync(_upHost, _upPort, connCts.Token);
+
+                var uStream = upstream.GetStream();
+                byte[] outHdr = Encoding.ASCII.GetBytes(modifiedHeaders);
+                await uStream.WriteAsync(outHdr, ct);
+                if (trailingBody.Length > 0)
+                    await uStream.WriteAsync(trailingBody, ct);
+
+                var t1 = cStream.CopyToAsync(uStream, ct);
+                var t2 = uStream.CopyToAsync(cStream, ct);
+                await Task.WhenAny(t1, t2);
+            }
+            catch { }
+        }
+    }
+
+    private static int FindHeaderEnd(byte[] data)
+    {
+        for (int i = 0; i <= data.Length - 4; i++)
+        {
+            if (data[i] == 13 && data[i + 1] == 10 && data[i + 2] == 13 && data[i + 3] == 10)
+                return i;
+        }
+        return -1;
+    }
+
+    public void Dispose()
+    {
+        try { _cts.Cancel(); } catch { }
+        try { _listener.Stop(); } catch { }
+        _cts.Dispose();
+    }
+}

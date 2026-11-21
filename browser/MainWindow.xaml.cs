@@ -232,7 +232,9 @@ public partial class MainWindow : Window
 
         ProfileVpnSession? vpnSession = null;
         LocalSocks5AuthForwarder? socksFwd = null;
+        LocalHttpProxyAuthForwarder? httpFwd = null;
         int localSocksPort = 0;
+        int localHttpPort = 0;
 
         try
         {
@@ -266,11 +268,17 @@ public partial class MainWindow : Window
             }
             else if (profile.ProxyType is "HTTP" or "HTTPS")
             {
-                if (string.IsNullOrWhiteSpace(profile.ProxyHost) || string.IsNullOrWhiteSpace(profile.ProxyPort))
+                if (string.IsNullOrWhiteSpace(profile.ProxyHost) || !int.TryParse(profile.ProxyPort, out int hp) || hp <= 0)
                 {
                     busy.Close();
                     DarkDialog.ShowInfo(this, "Invalid Proxy", $"Please enter a valid {profile.ProxyType} Host and Port.");
                     return;
+                }
+                if (!string.IsNullOrWhiteSpace(profile.ProxyUser))
+                {
+                    busy.UpdateBusyMessage($"Starting authenticated HTTP proxy bridge to {profile.ProxyHost}:{hp}...");
+                    httpFwd = new LocalHttpProxyAuthForwarder(profile.ProxyHost, hp, profile.ProxyUser, profile.ProxyPass);
+                    localHttpPort = httpFwd.Port;
                 }
             }
 
@@ -291,6 +299,7 @@ public partial class MainWindow : Window
                         busy.Close();
                         vpnSession?.Dispose();
                         socksFwd?.Dispose();
+            httpFwd?.Dispose();
                         DarkDialog.ShowInfo(this, "Connection Not Ready",
                             $"The {profile.ProxyType} connection could not reach the internet.\n\nBrowser launch was cancelled to protect your real IP. Check your proxy credentials, port, or VPN config.");
                         return;
@@ -314,8 +323,8 @@ public partial class MainWindow : Window
 
             busy.Close();
 
-            var conn = new VerifiedConnection(vpnSession, socksFwd, localSocksPort, exitIp, exitLoc, exitTz, lat, lon);
-            var session = new RealChromiumSession(profile, conn);
+            var conn = new VerifiedConnection(vpnSession, socksFwd, localSocksPort, exitIp, exitLoc, exitTz, lat, lon, httpFwd, localHttpPort);
+            var session = new RealChromiumSession(profile, conn, () => ProfileStore.Save(_allProfiles));
             if (!session.Launch(chromiumExe, out string launchErr))
             {
                 session.Dispose();
@@ -347,6 +356,7 @@ public partial class MainWindow : Window
             try { busy.Close(); } catch { }
             vpnSession?.Dispose();
             socksFwd?.Dispose();
+            httpFwd?.Dispose();
             DarkDialog.ShowInfo(this, "Launch Error", ex.Message);
         }
     }

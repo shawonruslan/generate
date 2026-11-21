@@ -17,7 +17,7 @@ namespace MHBrowser;
 /// </summary>
 public static class ChromiumManager
 {
-    private const string CftApiUrl = "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json";
+    private const string ChromiumBaseUrl = "https://storage.googleapis.com/chromium-browser-snapshots/Win_x64";
 
     public static string BundledChromiumDir => Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "chromium"));
     public static string LocalChromiumDir => Path.Combine(
@@ -84,8 +84,10 @@ public static class ChromiumManager
         if (!Directory.Exists(dir)) return "";
         string direct = Path.Combine(dir, "chrome.exe");
         if (File.Exists(direct)) return direct;
-        string sub = Path.Combine(dir, "chrome-win64", "chrome.exe");
-        if (File.Exists(sub)) return sub;
+        string sub1 = Path.Combine(dir, "chrome-win", "chrome.exe");
+        if (File.Exists(sub1)) return sub1;
+        string sub2 = Path.Combine(dir, "chrome-win64", "chrome.exe");
+        if (File.Exists(sub2)) return sub2;
         return "";
     }
 
@@ -104,38 +106,24 @@ public static class ChromiumManager
             onStatus?.Invoke("Checking for Chromium engine updates...");
 
             using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
-            http.DefaultRequestHeaders.UserAgent.ParseAdd("MHAdvancedTool/5.0");
-            string json = await http.GetStringAsync(CftApiUrl, ct);
-            using var doc = JsonDocument.Parse(json);
+            http.DefaultRequestHeaders.UserAgent.ParseAdd("MHAdvancedTool/5.1");
+            string rev = (await http.GetStringAsync($"{ChromiumBaseUrl}/LAST_CHANGE", ct)).Trim();
+            if (string.IsNullOrWhiteSpace(rev))
+                return (false, currentVer, "Could not read latest Chromium revision.");
 
-            var stable = doc.RootElement.GetProperty("channels").GetProperty("Stable");
-            string latestVer = stable.GetProperty("version").GetString() ?? "";
-            if (string.IsNullOrWhiteSpace(latestVer))
-                return (false, currentVer, "Could not read latest Chromium version.");
-
+            string latestVer = $"r{rev}";
             bool hasExe = !string.IsNullOrEmpty(FindChromiumExe());
             if (hasExe && currentVer.Equals(latestVer, StringComparison.OrdinalIgnoreCase))
-                return (false, currentVer, $"Chromium v{currentVer} is up to date.");
+                return (false, currentVer, $"Standard Chromium {currentVer} is up to date.");
 
-            string? dlUrl = null;
-            foreach (var item in stable.GetProperty("downloads").GetProperty("chrome").EnumerateArray())
-            {
-                if (item.TryGetProperty("platform", out var pf) && pf.GetString() == "win64")
-                {
-                    dlUrl = item.GetProperty("url").GetString();
-                    break;
-                }
-            }
-            if (string.IsNullOrWhiteSpace(dlUrl))
-                return (false, currentVer, "win64 Chromium download URL not found.");
-
+            string dlUrl = $"{ChromiumBaseUrl}/{rev}/chrome-win.zip";
             string stageRoot = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MHAdvancedTool", "chromium_staging");
             if (Directory.Exists(stageRoot)) Directory.Delete(stageRoot, recursive: true);
             Directory.CreateDirectory(stageRoot);
 
-            string zipPath = Path.Combine(stageRoot, "chrome-win64.zip");
-            onStatus?.Invoke($"Downloading Real Chromium v{latestVer}...");
+            string zipPath = Path.Combine(stageRoot, "chrome-win.zip");
+            onStatus?.Invoke($"Downloading Standard Chromium {latestVer}...");
 
             using (var resp = await http.GetAsync(dlUrl, HttpCompletionOption.ResponseHeadersRead, ct))
             {
@@ -166,9 +154,9 @@ public static class ChromiumManager
             onStatus?.Invoke($"Extracting Chromium v{latestVer}...");
             string extDir = Path.Combine(stageRoot, "ext");
             ZipFile.ExtractToDirectory(zipPath, extDir, overwriteFiles: true);
-            string extractedRoot = Directory.Exists(Path.Combine(extDir, "chrome-win64"))
-                ? Path.Combine(extDir, "chrome-win64")
-                : extDir;
+            string extractedRoot = Directory.Exists(Path.Combine(extDir, "chrome-win"))
+                ? Path.Combine(extDir, "chrome-win")
+                : (Directory.Exists(Path.Combine(extDir, "chrome-win64")) ? Path.Combine(extDir, "chrome-win64") : extDir);
             File.WriteAllText(Path.Combine(extractedRoot, "version.txt"), latestVer);
 
             if (isAnyProfileRunning())
@@ -235,7 +223,9 @@ public sealed class RealChromiumSession : IDisposable
     public bool IsRunning => _proc is not null && !_proc.HasExited;
 
     private Process? _proc;
+    private readonly Action _saveStore;
     private readonly CancellationTokenSource _cts = new();
+    private ProfileToolsDockWindow? _dockWindow;
     private InspectorWindow? _inspectorWindow;
     private CdpInspectorBridge? _inspectorBridge;
     private readonly ObservableCollection<CapturedNetRequest> _capturedNet = new();
@@ -246,12 +236,15 @@ public sealed class RealChromiumSession : IDisposable
 
     public event Action? Exited;
 
-    public RealChromiumSession(BrowserProfile profile, VerifiedConnection conn)
+    public RealChromiumSession(BrowserProfile profile, VerifiedConnection conn, Action? saveStore = null)
     {
         Profile = profile;
         Connection = conn;
+        _saveStore = saveStore ?? (() => { });
         CdpPort = CdpPortAllocator.AllocateFreePort();
     }
+
+    public (bool Active, double Lat, double Lon, double Acc) GetResolvedGeo() => ResolveGeo();
 
     public bool Launch(string chromiumExe, out string error)
     {
@@ -260,7 +253,10 @@ public sealed class RealChromiumSession : IDisposable
         {
             Directory.CreateDirectory(Profile.UserDataDir);
 
-            // 1) Generate per-profile MV3 companion stealth & GPS extension (runs at document_start in MAIN world)
+            // 0) Set Chrome's native profile name in Local State & Preferences so Chrome's toolbar shows the profile name
+            WriteChromeProfileNamePreference();
+
+            // 1) Generate per-profile MV3 companion stealth, GPS & Profile Badge extension
             string envExtDir = BuildCompanionExtension();
 
             // 2) Collect all extensions to load (companion + user's Profile Editor extensions)
@@ -286,6 +282,8 @@ public sealed class RealChromiumSession : IDisposable
                 "--no-first-run",
                 "--no-default-browser-check",
                 "--disable-default-apps",
+                "--disable-infobars",
+                "--test-type=gpu",
                 "--disable-blink-features=AutomationControlled",
                 "--disable-quic",
                 $"--lang={Profile.Language}",
@@ -296,18 +294,20 @@ public sealed class RealChromiumSession : IDisposable
             if (!string.IsNullOrWhiteSpace(Profile.UserAgent))
                 args.Add($"--user-agent=\"{Profile.UserAgent}\"");
 
-            // Hard Zero-Leak Network Shield
+            // Hard Zero-Leak Network Shield (Chromium resolves DNS remotely over SOCKS5 & HTTP CONNECT without needing --host-resolver-rules)
             if (Connection.LocalSocksPort > 0)
             {
                 args.Add($"--proxy-server=\"socks5://127.0.0.1:{Connection.LocalSocksPort}\"");
-                args.Add("--host-resolver-rules=\"MAP * ~NOTFOUND , EXCLUDE 127.0.0.1\"");
+            }
+            else if (Connection.LocalHttpPort > 0)
+            {
+                args.Add($"--proxy-server=\"http://127.0.0.1:{Connection.LocalHttpPort}\"");
             }
             else if (Profile.ProxyType is "HTTP" or "HTTPS" &&
                      !string.IsNullOrWhiteSpace(Profile.ProxyHost) && !string.IsNullOrWhiteSpace(Profile.ProxyPort))
             {
                 string scheme = Profile.ProxyType == "HTTPS" ? "https" : "http";
                 args.Add($"--proxy-server=\"{scheme}://{Profile.ProxyHost}:{Profile.ProxyPort}\"");
-                args.Add($"--host-resolver-rules=\"MAP * ~NOTFOUND , EXCLUDE {Profile.ProxyHost.Trim()}\"");
             }
 
             if (Profile.WebRtcProtect || Profile.ProxyType != "Direct")
@@ -330,6 +330,9 @@ public sealed class RealChromiumSession : IDisposable
                     UseShellExecute = false
                 }
             };
+            _proc.StartInfo.Environment["GOOGLE_API_KEY"] = "no";
+            _proc.StartInfo.Environment["GOOGLE_DEFAULT_CLIENT_ID"] = "no";
+            _proc.StartInfo.Environment["GOOGLE_DEFAULT_CLIENT_SECRET"] = "no";
             _proc.Exited += (_, _) =>
             {
                 Dispose();
@@ -347,6 +350,17 @@ public sealed class RealChromiumSession : IDisposable
             // 6) Auto-healing VPN tunnel monitor (reconnects OpenVPN/WireGuard on same LocalSocksPort if it drops)
             if (Connection.VpnSession is not null)
                 _ = Task.Run(() => MonitorVpnAutoHealLoopAsync(_cts.Token));
+
+            // 7) Launch collapsible floating MH Tools Dock on right edge of screen
+            Application.Current.Dispatcher.BeginInvoke(() =>
+            {
+                try
+                {
+                    _dockWindow = new ProfileToolsDockWindow(this, _saveStore);
+                    _dockWindow.Show();
+                }
+                catch { }
+            });
 
             return true;
         }
@@ -398,6 +412,126 @@ public sealed class RealChromiumSession : IDisposable
             _inspectorWindow.Show();
             _ = _inspectorBridge.StartAsync();
         });
+    }
+
+    public async Task NavigateActiveTabAsync(string url)
+    {
+        await RunSingleCdpCommandAsync("Page.navigate", new { url });
+    }
+
+    public async Task ApplyLiveGeolocationAsync(double lat, double lon)
+    {
+        double acc = Profile.CustomGeoAccuracy > 0 ? Profile.CustomGeoAccuracy : 35;
+        await RunSingleCdpCommandAsync("Emulation.setGeolocationOverride", new { latitude = lat, longitude = lon, accuracy = acc });
+    }
+
+    public async Task HumanTypeAsync(string text)
+    {
+        try
+        {
+            string? wsUrl = await CdpInspectorBridge.GetFirstPageWsUrlAsync(CdpPort, _cts.Token);
+            if (string.IsNullOrEmpty(wsUrl)) return;
+            using var ws = new ClientWebSocket();
+            await ws.ConnectAsync(new Uri(wsUrl), _cts.Token);
+            int seq = 1;
+            var rng = new Random();
+            foreach (char ch in text)
+            {
+                string cmd = JsonSerializer.Serialize(new { id = seq++, method = "Input.insertText", @params = new { text = ch.ToString() } });
+                await ws.SendAsync(Encoding.UTF8.GetBytes(cmd), WebSocketMessageType.Text, true, _cts.Token);
+                await Task.Delay(rng.Next(25, 85), _cts.Token);
+            }
+            await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "done", _cts.Token);
+        }
+        catch { }
+    }
+
+    public async Task<int> ExportCookiesJsonAsync(string filePath)
+    {
+        try
+        {
+            string? resp = await RunSingleCdpCommandWithResponseAsync("Network.getAllCookies", new { });
+            if (string.IsNullOrEmpty(resp)) return 0;
+            using var doc = JsonDocument.Parse(resp);
+            if (doc.RootElement.TryGetProperty("result", out var res) && res.TryGetProperty("cookies", out var cookies))
+            {
+                File.WriteAllText(filePath, JsonSerializer.Serialize(cookies, new JsonSerializerOptions { WriteIndented = true }));
+                return cookies.GetArrayLength();
+            }
+        }
+        catch { }
+        return 0;
+    }
+
+    public async Task<int> ImportCookiesJsonAsync(string filePath)
+    {
+        try
+        {
+            string raw = File.ReadAllText(filePath);
+            using var doc = JsonDocument.Parse(raw);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array) return 0;
+            var list = new List<object>();
+            foreach (var c in doc.RootElement.EnumerateArray())
+            {
+                string name = c.TryGetProperty("name", out var n) ? (n.GetString() ?? "") : "";
+                string value = c.TryGetProperty("value", out var v) ? (v.GetString() ?? "") : "";
+                string domain = c.TryGetProperty("domain", out var d) ? (d.GetString() ?? "") : "";
+                string path = c.TryGetProperty("path", out var p) ? (p.GetString() ?? "/") : "/";
+                if (!string.IsNullOrEmpty(name) && !string.IsNullOrEmpty(domain))
+                    list.Add(new { name, value, domain, path });
+            }
+            if (list.Count > 0)
+                await RunSingleCdpCommandAsync("Network.setCookies", new { cookies = list });
+            return list.Count;
+        }
+        catch { return 0; }
+    }
+
+    private async Task RunSingleCdpCommandAsync(string method, object parameters)
+    {
+        try
+        {
+            string? wsUrl = await CdpInspectorBridge.GetFirstPageWsUrlAsync(CdpPort, _cts.Token);
+            if (string.IsNullOrEmpty(wsUrl)) return;
+            using var ws = new ClientWebSocket();
+            await ws.ConnectAsync(new Uri(wsUrl), _cts.Token);
+            string cmd = JsonSerializer.Serialize(new { id = 1, method, @params = parameters });
+            await ws.SendAsync(Encoding.UTF8.GetBytes(cmd), WebSocketMessageType.Text, true, _cts.Token);
+            await Task.Delay(180, _cts.Token);
+            await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "done", _cts.Token);
+        }
+        catch { }
+    }
+
+    private async Task<string?> RunSingleCdpCommandWithResponseAsync(string method, object parameters)
+    {
+        try
+        {
+            string? wsUrl = await CdpInspectorBridge.GetFirstPageWsUrlAsync(CdpPort, _cts.Token);
+            if (string.IsNullOrEmpty(wsUrl)) return null;
+            using var ws = new ClientWebSocket();
+            await ws.ConnectAsync(new Uri(wsUrl), _cts.Token);
+            string cmd = JsonSerializer.Serialize(new { id = 99, method, @params = parameters });
+            await ws.SendAsync(Encoding.UTF8.GetBytes(cmd), WebSocketMessageType.Text, true, _cts.Token);
+            var buf = new byte[65536];
+            using var ms = new MemoryStream();
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            while (!timeout.IsCancellationRequested)
+            {
+                ms.SetLength(0);
+                WebSocketReceiveResult r;
+                do
+                {
+                    r = await ws.ReceiveAsync(buf, timeout.Token);
+                    if (r.MessageType == WebSocketMessageType.Close) return null;
+                    ms.Write(buf, 0, r.Count);
+                } while (!r.EndOfMessage);
+                string txt = Encoding.UTF8.GetString(ms.ToArray());
+                if (txt.Contains(""id":99")) return txt;
+            }
+        }
+        catch { }
+        return null;
     }
 
     public void CloseBrowser()
@@ -529,8 +663,8 @@ public sealed class RealChromiumSession : IDisposable
         {
           "manifest_version": 3,
           "name": "MH Profile Environment",
-          "version": "5.0.0",
-          "description": "Per-profile fingerprint, WebGL, WebRTC, and GPS environment.",
+          "version": "5.1.2",
+          "description": "Per-profile fingerprint, WebGL, WebRTC, GPS & Profile Badge.",
           "content_scripts": [
             {
               "matches": ["<all_urls>"],
@@ -538,6 +672,12 @@ public sealed class RealChromiumSession : IDisposable
               "run_at": "document_start",
               "all_frames": true,
               "world": "MAIN"
+            },
+            {
+              "matches": ["<all_urls>"],
+              "js": ["badge.js"],
+              "run_at": "document_idle",
+              "all_frames": false
             }
           ]
         }
@@ -654,15 +794,103 @@ try {{
 
         sb.AppendLine("})();");
         File.WriteAllText(Path.Combine(extDir, "env.js"), sb.ToString());
+
+        // Write isolated Shadow-DOM profile badge (top-level page only) so user always knows which profile is open
+        string profNameJs = JsonSerializer.Serialize(Profile.Name ?? "Profile");
+        string proxyTagJs = JsonSerializer.Serialize(string.IsNullOrWhiteSpace(Connection.ExitIp)
+            ? Profile.ProxySummary
+            : $"{Connection.ExitIp}{(string.IsNullOrWhiteSpace(Connection.Location) ? "" : " · " + Connection.Location)}");
+        string badgeJs = $@"(() => {{
+  if (window.top !== window.self || document.getElementById('__mh_profile_badge_host')) return;
+  const host = document.createElement('div');
+  host.id = '__mh_profile_badge_host';
+  host.style.cssText = 'position:fixed;bottom:10px;left:10px;z-index:2147483647;pointer-events:auto;';
+  const shadow = host.attachShadow({{ mode: 'closed' }});
+  const pill = document.createElement('div');
+  pill.style.cssText = 'display:flex;align-items:center;gap:7px;background:rgba(15,18,25,0.92);color:#F3F5F8;border:1px solid rgba(245,197,24,0.65);border-radius:999px;padding:4px 10px;font:600 11.5px/1.2 "Segoe UI",system-ui,sans-serif;box-shadow:0 4px 14px rgba(0,0,0,0.45);backdrop-filter:blur(6px);user-select:none;cursor:pointer;';
+  const dot = document.createElement('span');
+  dot.style.cssText = 'width:7px;height:7px;border-radius:50%;background:#22C55E;flex-shrink:0;';
+  const lbl = document.createElement('span');
+  lbl.textContent = {profNameJs};
+  lbl.style.cssText = 'color:#F5C518;font-weight:700;';
+  const sub = document.createElement('span');
+  sub.textContent = {proxyTagJs};
+  sub.style.cssText = 'color:#9AA4B2;font-weight:500;font-size:10.5px;';
+  const closeBtn = document.createElement('span');
+  closeBtn.textContent = '×';
+  closeBtn.title = 'Hide badge on this tab';
+  closeBtn.style.cssText = 'margin-left:4px;color:#9AA4B2;font-size:13px;line-height:1;padding:0 2px;';
+  closeBtn.onclick = (e) => {{ e.stopPropagation(); host.remove(); }};
+  pill.title = 'MH Browser Profile — click to toggle compact mode';
+  let compact = false;
+  pill.onclick = () => {{ compact = !compact; sub.style.display = compact ? 'none' : 'inline'; }};
+  pill.append(dot, lbl, sub, closeBtn);
+  shadow.appendChild(pill);
+  (document.documentElement || document.body).appendChild(host);
+}})();";
+        File.WriteAllText(Path.Combine(extDir, "badge.js"), badgeJs);
         return extDir;
+    }
+
+    private void WriteChromeProfileNamePreference()
+    {
+        try
+        {
+            string defDir = Path.Combine(Profile.UserDataDir, "Default");
+            Directory.CreateDirectory(defDir);
+            string prefPath = Path.Combine(defDir, "Preferences");
+            System.Text.Json.Nodes.JsonObject root;
+            if (File.Exists(prefPath))
+            {
+                try { root = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(prefPath)) as System.Text.Json.Nodes.JsonObject ?? new(); }
+                catch { root = new(); }
+            }
+            else root = new();
+
+            var profObj = root["profile"] as System.Text.Json.Nodes.JsonObject ?? new();
+            profObj["name"] = Profile.Name;
+            profObj["using_default_name"] = false;
+            root["profile"] = profObj;
+            File.WriteAllText(prefPath, root.ToJsonString());
+
+            string lsPath = Path.Combine(Profile.UserDataDir, "Local State");
+            System.Text.Json.Nodes.JsonObject lsRoot;
+            if (File.Exists(lsPath))
+            {
+                try { lsRoot = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(lsPath)) as System.Text.Json.Nodes.JsonObject ?? new(); }
+                catch { lsRoot = new(); }
+            }
+            else lsRoot = new();
+
+            var lsProf = lsRoot["profile"] as System.Text.Json.Nodes.JsonObject ?? new();
+            var infoCache = lsProf["info_cache"] as System.Text.Json.Nodes.JsonObject ?? new();
+            var defCache = infoCache["Default"] as System.Text.Json.Nodes.JsonObject ?? new();
+            defCache["name"] = Profile.Name;
+            defCache["is_using_default_name"] = false;
+            infoCache["Default"] = defCache;
+            lsProf["info_cache"] = infoCache;
+            lsRoot["profile"] = lsProf;
+            File.WriteAllText(lsPath, lsRoot.ToJsonString());
+        }
+        catch { }
     }
 
     public void Dispose()
     {
         try { _cts.Cancel(); } catch { }
         try { _inspectorBridge?.Dispose(); } catch { }
+        try
+        {
+            Application.Current?.Dispatcher.BeginInvoke(() =>
+            {
+                try { _dockWindow?.Close(); } catch { }
+                try { _inspectorWindow?.Close(); } catch { }
+            });
+        }
+        catch { }
         try { Connection.VpnSession?.Dispose(); } catch { }
         try { Connection.SocksForwarder?.Dispose(); } catch { }
+        try { Connection.HttpForwarder?.Dispose(); } catch { }
         if (_hIconBig != IntPtr.Zero) { DestroyIcon(_hIconBig); _hIconBig = IntPtr.Zero; }
         if (_hIconSmall != IntPtr.Zero) { DestroyIcon(_hIconSmall); _hIconSmall = IntPtr.Zero; }
         Profile.IsRunning = false;

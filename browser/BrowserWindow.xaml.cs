@@ -24,7 +24,9 @@ public sealed record VerifiedConnection(
     string Location,
     string Timezone,
     double Lat,
-    double Lon);
+    double Lon,
+    LocalHttpProxyAuthForwarder? HttpForwarder = null,
+    int LocalHttpPort = 0);
 
 public partial class BrowserWindow : Window
 {

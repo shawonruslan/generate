@@ -141,18 +141,17 @@ jobs:
             Write-Warning "WireGuard MSI bundle skipped: $_"
           }
 
-      - name: Bundle Real Chromium (Stable win64) & Patch Custom MH Browser Icon
+      - name: Bundle Standard Chromium (Official Win_x64 — No Testing Mode) & Patch Custom MH Browser Icon
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "chromium", "C:\cft-tmp" | Out-Null
-          $meta = Invoke-RestMethod -Uri "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json"
-          $stableVer = $meta.channels.Stable.version
-          $dl = ($meta.channels.Stable.downloads.chrome | Where-Object { $_.platform -eq "win64" } | Select-Object -First 1).url
-          Write-Host "Bundling Real Chromium Stable win64 v$stableVer from $dl"
-          Invoke-WebRequest -Uri $dl -OutFile "C:\cft-tmp\chrome-win64.zip"
-          Expand-Archive -Path "C:\cft-tmp\chrome-win64.zip" -DestinationPath "C:\cft-tmp\out" -Force
-          Copy-Item "C:\cft-tmp\out\chrome-win64\*" "chromium\" -Recurse -Force
-          Set-Content -Path "chromium\version.txt" -Value $stableVer -NoNewline
+          $rev = (Invoke-RestMethod -Uri "https://storage.googleapis.com/chromium-browser-snapshots/Win_x64/LAST_CHANGE").ToString().Trim()
+          $dl = "https://storage.googleapis.com/chromium-browser-snapshots/Win_x64/$rev/chrome-win.zip"
+          Write-Host "Bundling Standard Official Chromium Win_x64 r$rev from $dl"
+          Invoke-WebRequest -Uri $dl -OutFile "C:\cft-tmp\chrome-win.zip"
+          Expand-Archive -Path "C:\cft-tmp\chrome-win.zip" -DestinationPath "C:\cft-tmp\out" -Force
+          Copy-Item "C:\cft-tmp\out\chrome-win\*" "chromium\" -Recurse -Force
+          Set-Content -Path "chromium\version.txt" -Value "r$rev" -NoNewline
 
           # Patch chrome.exe embedded PE icon with our custom MH Browser Globe logo (browser/browser.ico)
           try {
