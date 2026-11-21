@@ -1,0 +1,368 @@
+<Window x:Class="MHBrowser.BrowserWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="MH Browser" Icon="pack://application:,,,/app.ico"
+        Width="1280" Height="820" MinWidth="900" MinHeight="600"
+        WindowState="Maximized"
+        WindowStyle="None" ResizeMode="CanResize" AllowsTransparency="False"
+        Background="{StaticResource Bg}" Foreground="{StaticResource Text}"
+        FontFamily="Segoe UI" KeyDown="Window_KeyDown" StateChanged="Window_StateChanged">
+    <WindowChrome.WindowChrome>
+        <WindowChrome CaptionHeight="38" ResizeBorderThickness="6" GlassFrameThickness="0" CornerRadius="0"/>
+    </WindowChrome.WindowChrome>
+
+    <Grid x:Name="RootGrid" Background="{StaticResource Bg}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="38"/>
+            <RowDefinition Height="42"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="22"/>
+        </Grid.RowDefinitions>
+
+        <!-- ======================= UNIFIED CHROME/BRAVE TAB TITLEBAR ======================= -->
+        <Grid Grid.Row="0" Background="{StaticResource Bg}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <Border Grid.Column="0" Background="#FF24200E" BorderBrush="{StaticResource Accent}" BorderThickness="1"
+                    CornerRadius="4" Padding="7,2" Margin="8,0,6,0" VerticalAlignment="Center"
+                    WindowChrome.IsHitTestVisibleInChrome="True">
+                <TextBlock x:Name="ProfileBadgeText" Text="Profile" Foreground="{StaticResource Accent}" FontSize="11" FontWeight="SemiBold"/>
+            </Border>
+
+            <ScrollViewer Grid.Column="1" HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled"
+                          VerticalAlignment="Bottom" Margin="0,0,8,0">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Bottom">
+                    <StackPanel x:Name="TabsPanel" Orientation="Horizontal" VerticalAlignment="Bottom"/>
+                    <Button Style="{StaticResource ToolbarIconButton}" Width="28" Height="28" Margin="4,0,0,4"
+                            Click="BtnNewTab_Click" ToolTip="New Tab (Ctrl+T)"
+                            WindowChrome.IsHitTestVisibleInChrome="True">
+                        <Path Style="{StaticResource IconPath}" Data="{StaticResource IconPlus}" Fill="{StaticResource Muted}" Width="12" Height="12"/>
+                    </Button>
+                </StackPanel>
+            </ScrollViewer>
+
+            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Stretch">
+                <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                        CornerRadius="4" Padding="6,2" Margin="0,0,5,0" VerticalAlignment="Center"
+                        WindowChrome.IsHitTestVisibleInChrome="True">
+                    <TextBlock x:Name="ProxyBadgeText" Text="Direct" Foreground="{StaticResource Muted}" FontSize="10.5"/>
+                </Border>
+                <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                        CornerRadius="4" Padding="6,2" Margin="0,0,8,0" VerticalAlignment="Center"
+                        WindowChrome.IsHitTestVisibleInChrome="True">
+                    <TextBlock x:Name="TzBadgeText" Text="TZ: System" Foreground="{StaticResource Green}" FontSize="10.5"/>
+                </Border>
+
+                <Button Style="{StaticResource CaptionButton}" Content="&#x2014;" Click="BtnMin_Click" ToolTip="Minimize"/>
+                <Button x:Name="BtnMaxRestore" Style="{StaticResource CaptionButton}" Content="&#x2750;" Click="BtnMax_Click" ToolTip="Maximize / Restore"/>
+                <Button Style="{StaticResource CloseCaptionButton}" Content="&#x2715;" Click="BtnClose_Click" ToolTip="Close"/>
+            </StackPanel>
+        </Grid>
+
+        <!-- ======================= BROWSER NAVIGATION, OMNIBOX & PAGE LOAD BAR ======================= -->
+        <Border Grid.Row="1" Background="{StaticResource Panel}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1">
+            <Grid>
+                <Grid Margin="8,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button Style="{StaticResource ToolbarIconButton}" Click="BtnBack_Click" ToolTip="Back">
+                            <Path Style="{StaticResource IconPath}" Data="{StaticResource IconBack}" Width="14" Height="14"/>
+                        </Button>
+                        <Button Style="{StaticResource ToolbarIconButton}" Margin="2,0,0,0" Click="BtnForward_Click" ToolTip="Forward">
+                            <Path Style="{StaticResource IconPath}" Data="{StaticResource IconForward}" Width="14" Height="14"/>
+                        </Button>
+                        <Button x:Name="BtnReloadStop" Style="{StaticResource ToolbarIconButton}" Margin="2,0,0,0" Click="BtnReload_Click" ToolTip="Reload (F5)">
+                            <Path x:Name="ReloadIcon" Style="{StaticResource IconPath}" Data="{StaticResource IconReload}" Width="14" Height="14"/>
+                        </Button>
+                        <Button Style="{StaticResource ToolbarIconButton}" Margin="2,0,0,0" Click="BtnHome_Click" ToolTip="Home">
+                            <Path Style="{StaticResource IconPath}" Data="{StaticResource IconHome}" Fill="{StaticResource Muted}" Width="14" Height="14"/>
+                        </Button>
+                    </StackPanel>
+
+                    <Border Grid.Column="1" Background="{StaticResource Bg}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                            CornerRadius="15" Height="30" Margin="10,0" Padding="10,0,4,0">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <Button x:Name="BtnSitePermissions" Grid.Column="0" Style="{StaticResource ToolbarIconButton}" Width="24" Height="24" Margin="-4,0,4,0"
+                                    Click="BtnSitePermissions_Click" ToolTip="Site Permissions (Camera, Mic, Location, Notifications)">
+                                <Path Style="{StaticResource IconPath}" Data="{StaticResource IconLock}" Fill="{StaticResource Green}" Width="11" Height="11"/>
+                            </Button>
+                            <TextBox x:Name="UrlBox" Grid.Column="1" Background="Transparent" Foreground="{StaticResource Text}"
+                                     CaretBrush="{StaticResource Accent}" BorderThickness="0" FontSize="12.5" VerticalContentAlignment="Center"
+                                     KeyDown="UrlBox_KeyDown" GotKeyboardFocus="UrlBox_GotFocus"/>
+                            <Button Grid.Column="2" Style="{StaticResource ToolbarIconButton}" Width="26" Height="26"
+                                    Click="BtnToggleBookmark_Click" ToolTip="Bookmark this page (Ctrl+D)">
+                                <Path x:Name="BookmarkStarIcon" Style="{StaticResource IconPath}" Data="{StaticResource IconStar}" Fill="{StaticResource Muted}" Width="13" Height="13"/>
+                            </Button>
+                        </Grid>
+                    </Border>
+
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button Style="{StaticResource ToolbarIconButton}" Width="30" Height="30" Margin="0,0,4,0"
+                                Click="BtnOpenInspector_Click" ToolTip="Open Network &amp; UI Activity Inspector (Reqable/Fiddler Mode)">
+                            <Path Style="{StaticResource IconPath}" Data="{StaticResource IconCode}" Fill="{StaticResource Accent}" Width="15" Height="15"/>
+                        </Button>
+                        <Button x:Name="BtnToggleTray" Style="{StaticResource ToolbarIconButton}" Width="32" Height="30"
+                                Click="BtnToggleTray_Click" ToolTip="Browser Menu (Tools, Inspector, Bookmarks, History)">
+                            <Path Style="{StaticResource IconPath}" Data="{StaticResource IconMenu}" Width="15" Height="15"/>
+                        </Button>
+                    </StackPanel>
+                </Grid>
+
+                <ProgressBar x:Name="PageLoadBar" Height="2.5" VerticalAlignment="Bottom"
+                             IsIndeterminate="True" Visibility="Collapsed"
+                             Foreground="{StaticResource Accent}" Background="Transparent" BorderThickness="0"/>
+            </Grid>
+        </Border>
+
+        <!-- ======================= BANNERS (SHIELD + SITE PERMISSIONS + LIVE PROMPT) ======================= -->
+        <StackPanel Grid.Row="2">
+            <Border x:Name="KillSwitchBanner" Background="#FF4A2A0A" BorderBrush="{StaticResource Accent}" BorderThickness="0,0,0,1" Visibility="Collapsed" Padding="12,6">
+                <Grid>
+                    <TextBlock x:Name="KillSwitchBannerText"
+                               Text="SHIELD ACTIVE: VPN / Proxy temporarily interrupted. Your real IP is protected (zero leak). Auto-reconnecting..."
+                               Foreground="#FFFFE8C2" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,220,0" TextTrimming="CharacterEllipsis"/>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button x:Name="BtnReconnectNow" Style="{StaticResource AccentButton}" Content="Reconnect Now" Padding="10,3" FontSize="11" Margin="0,0,6,0" Click="BtnReconnectNow_Click"/>
+                        <Button Style="{StaticResource FlatButton}" Content="Reload Tab" Padding="10,3" FontSize="11" Click="BtnReload_Click"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <Border x:Name="PermissionPromptBar" Background="#FF182230" BorderBrush="{StaticResource Accent}" BorderThickness="0,0,0,1" Visibility="Collapsed" Padding="12,6">
+                <Grid>
+                    <TextBlock x:Name="PermissionPromptText" Text="This site is requesting permission."
+                               Foreground="{StaticResource Text}" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,170,0" TextTrimming="CharacterEllipsis"/>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button Style="{StaticResource GreenButton}" Content="Allow" Padding="12,3" FontSize="11" Margin="0,0,6,0" Click="BtnPermPromptAllow_Click"/>
+                        <Button Style="{StaticResource FlatButton}" Content="Block" Padding="12,3" FontSize="11" Click="BtnPermPromptDeny_Click"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <Border x:Name="SitePermissionsBar" Background="#FF14181F" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1" Visibility="Collapsed" Padding="12,6">
+                <Grid>
+                    <TextBlock x:Name="SitePermissionsOriginText" Text="Site Permissions"
+                               Foreground="{StaticResource Text}" FontSize="11.5" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,460,0" TextTrimming="CharacterEllipsis"/>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button Style="{StaticResource GreenButton}" Content="Allow Cam &amp; Mic + Reload" Padding="10,3" FontSize="11" Margin="0,0,6,0" Click="BtnSiteAllowCamMic_Click"/>
+                        <Button Style="{StaticResource FlatButton}" Content="Block Cam &amp; Mic" Padding="10,3" FontSize="11" Margin="0,0,6,0" Click="BtnSiteBlockCamMic_Click"/>
+                        <Button Style="{StaticResource FlatButton}" Content="Allow Location" Padding="10,3" FontSize="11" Margin="0,0,6,0" Click="BtnSiteAllowLoc_Click"/>
+                        <Button Style="{StaticResource FlatButton}" Content="Allow Notif" Padding="10,3" FontSize="11" Margin="0,0,6,0" Click="BtnSiteAllowNotif_Click"/>
+                        <Button Style="{StaticResource FlatButton}" Content="X" Padding="8,3" FontSize="11" Click="BtnSitePermissionsClose_Click"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </StackPanel>
+
+        <!-- ======================= BOOKMARKS BAR ======================= -->
+        <Border x:Name="BookmarksBarBorder" Grid.Row="3" Background="{StaticResource Surface}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1" Visibility="Collapsed" Padding="10,3">
+            <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                <StackPanel x:Name="BookmarksBarPanel" Orientation="Horizontal"/>
+            </ScrollViewer>
+        </Border>
+
+        <!-- ======================= CHROMIUM WEBVIEW + PRO CARD-BASED RIGHT TRAY ======================= -->
+        <Grid Grid.Row="4">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <Grid x:Name="WebViewHost" Grid.Column="0" Background="#FF000000"/>
+
+            <Border x:Name="SideTray" Grid.Column="1" Width="0" Background="{StaticResource Bg}"
+                    BorderBrush="{StaticResource BorderBrush}" BorderThickness="1,0,0,0" ClipToBounds="True">
+                <Grid Width="324">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="46"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- Segmented Pill Header -->
+                    <Border Grid.Row="0" Background="{StaticResource Surface}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1" Padding="10,0">
+                        <Grid>
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <Button x:Name="TrayTabTools" Style="{StaticResource AccentButton}" Padding="10,5" FontSize="11.5" Content="Tools" Click="TrayTabTools_Click"/>
+                                <Button x:Name="TrayTabBookmarks" Style="{StaticResource FlatButton}" Padding="10,5" FontSize="11.5" Margin="6,0,0,0" Content="Bookmarks" Click="TrayTabBookmarks_Click"/>
+                                <Button x:Name="TrayTabHistory" Style="{StaticResource FlatButton}" Padding="10,5" FontSize="11.5" Margin="6,0,0,0" Content="History" Click="TrayTabHistory_Click"/>
+                            </StackPanel>
+                            <Button Style="{StaticResource ToolbarIconButton}" Width="26" Height="26" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                    Content="&#x2715;" FontSize="11" Click="BtnToggleTray_Click"/>
+                        </Grid>
+                    </Border>
+
+                    <!-- TRAY: PRO GROUPED CARDS -->
+                    <ScrollViewer x:Name="TrayToolsPanel" Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="12">
+                        <StackPanel>
+                            <!-- Card 1: Reqable/Fiddler Network & UI Inspector -->
+                            <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="8" Padding="12" Margin="0,0,0,10">
+                                <StackPanel>
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                        <Ellipse Width="7" Height="7" Fill="{StaticResource Accent}" Margin="0,0,7,0"/>
+                                        <TextBlock Text="NETWORK &amp; UI ACTIVITY INSPECTOR" Style="{StaticResource SectionLabel}"/>
+                                    </StackPanel>
+                                    <Button Style="{StaticResource AccentButton}" Content="Open Reqable / Fiddler Inspector" Padding="10,8" FontSize="12" Click="BtnOpenInspector_Click"/>
+                                    <TextBlock x:Name="TrayInspectorCount" Text="Live capturing API requests &amp; UI actions" Foreground="{StaticResource Muted}" FontSize="10.5" Margin="0,6,0,0"/>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Card 2: Quick Tools & Automation -->
+                            <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="8" Padding="12" Margin="0,0,0,10">
+                                <StackPanel>
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                        <Ellipse Width="7" Height="7" Fill="{StaticResource Green}" Margin="0,0,7,0"/>
+                                        <TextBlock Text="QUICK TOOLS &amp; WARMUP" Style="{StaticResource SectionLabel}"/>
+                                    </StackPanel>
+                                    <UniformGrid Columns="3" Margin="0,0,0,8">
+                                        <Button Style="{StaticResource FlatButton}" Content="Cam Test" Padding="6,6" Margin="0,0,3,0" FontSize="11" Click="BtnWebcamTest_Click"/>
+                                        <Button Style="{StaticResource FlatButton}" Content="Check IP" Padding="6,6" Margin="3,0,3,0" FontSize="11" Click="BtnWhoer_Click"/>
+                                        <Button Style="{StaticResource FlatButton}" Content="DevTools" Padding="6,6" Margin="3,0,0,0" FontSize="11" Click="BtnDevTools_Click"/>
+                                    </UniformGrid>
+                                    <UniformGrid Columns="2">
+                                        <Button x:Name="BtnCookieRobot" Style="{StaticResource GreenButton}" Content="Cookie Robot" Padding="8,7" Margin="0,0,4,0" FontSize="11.5" Click="BtnCookieRobot_Click"/>
+                                        <Button Style="{StaticResource FlatButton}" Content="Human Paste" Padding="8,7" Margin="4,0,0,0" FontSize="11.5" Click="BtnHumanPaste_Click"/>
+                                    </UniformGrid>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Card 2.5: Live GPS Location Spoofer -->
+                            <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="8" Padding="12" Margin="0,0,0,10">
+                                <StackPanel>
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                        <Ellipse Width="7" Height="7" Fill="#FF4DA3FF" Margin="0,0,7,0"/>
+                                        <TextBlock Text="LOCATION SPOOFER (GPS)" Style="{StaticResource SectionLabel}"/>
+                                    </StackPanel>
+                                    <TextBlock x:Name="TrayGeoStatus" Text="Spoofed GPS: Auto" Foreground="{StaticResource Green}" FontSize="11" Margin="0,0,0,6" TextTrimming="CharacterEllipsis"/>
+                                    <ComboBox x:Name="CbLiveGeoPreset" Style="{StaticResource DarkCombo}" Margin="0,0,0,6" SelectionChanged="CbLiveGeoPreset_SelectionChanged"/>
+                                    <Grid Margin="0,0,0,6">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="6"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                        <TextBox x:Name="TxtLiveLat" Grid.Column="0" Style="{StaticResource DarkTextBox}" Padding="6,4" FontSize="11" ToolTip="Latitude"/>
+                                        <TextBox x:Name="TxtLiveLon" Grid.Column="2" Style="{StaticResource DarkTextBox}" Padding="6,4" FontSize="11" ToolTip="Longitude"/>
+                                    </Grid>
+                                    <UniformGrid Columns="2">
+                                        <Button Style="{StaticResource GreenButton}" Content="Apply Live GPS" Padding="6,6" Margin="0,0,4,0" FontSize="11" Click="BtnApplyLiveGeo_Click"/>
+                                        <Button Style="{StaticResource FlatButton}" Content="Test Location" Padding="6,6" Margin="4,0,0,0" FontSize="11" Click="BtnTestGeo_Click"/>
+                                    </UniformGrid>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Card 3: Multi-Window Sync & VirtualCam -->
+                            <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="8" Padding="12" Margin="0,0,0,10">
+                                <StackPanel>
+                                    <TextBlock Text="SYNC &amp; VIRTUAL CAMERA" Style="{StaticResource SectionLabel}" Margin="0,0,0,8"/>
+                                    <UniformGrid Columns="2" Margin="0,0,0,8">
+                                        <Button x:Name="BtnSetMasterSync" Style="{StaticResource FlatButton}" Content="Set as Master" Padding="8,6" Margin="0,0,4,0" FontSize="11" Click="BtnSetMasterSync_Click"/>
+                                        <Button Style="{StaticResource FlatButton}" Content="Tile Windows" Padding="8,6" Margin="4,0,0,0" FontSize="11" Click="BtnTileWindows_Click"/>
+                                    </UniformGrid>
+                                    <UniformGrid Columns="3" Margin="0,0,0,5">
+                                        <Button Style="{StaticResource FlatButton}" Content="Play/Pause" Padding="4,5" Margin="0,0,3,0" FontSize="10.5" Click="BtnVCamCmd_Click" Tag="playpause"/>
+                                        <Button Style="{StaticResource FlatButton}" Content="Prev Clip" Padding="4,5" Margin="3,0,3,0" FontSize="10.5" Click="BtnVCamCmd_Click" Tag="prev"/>
+                                        <Button Style="{StaticResource FlatButton}" Content="Next Clip" Padding="4,5" Margin="3,0,0,0" FontSize="10.5" Click="BtnVCamCmd_Click" Tag="next"/>
+                                    </UniformGrid>
+                                    <UniformGrid Columns="3">
+                                        <Button Style="{StaticResource FlatButton}" Content="Zoom +" Padding="4,5" Margin="0,0,3,0" FontSize="10.5" Click="BtnVCamCmd_Click" Tag="zoom-in"/>
+                                        <Button Style="{StaticResource FlatButton}" Content="Zoom -" Padding="4,5" Margin="3,0,3,0" FontSize="10.5" Click="BtnVCamCmd_Click" Tag="zoom-out"/>
+                                        <Button Style="{StaticResource FlatButton}" Content="Reset Cam" Padding="4,5" Margin="3,0,0,0" FontSize="10.5" Click="BtnVCamCmd_Click" Tag="zoom-reset"/>
+                                    </UniformGrid>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Card 4: Cookies, Extensions & Search Engine -->
+                            <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="8" Padding="12" Margin="0,0,0,10">
+                                <StackPanel>
+                                    <TextBlock Text="COOKIES, EXTENSIONS &amp; SEARCH" Style="{StaticResource SectionLabel}" Margin="0,0,0,8"/>
+                                    <UniformGrid Columns="2" Margin="0,0,0,6">
+                                        <Button Style="{StaticResource FlatButton}" Content="Import Cookies" Padding="8,6" Margin="0,0,4,0" FontSize="11" Click="BtnImportCookies_Click"/>
+                                        <Button Style="{StaticResource FlatButton}" Content="Export Cookies" Padding="8,6" Margin="4,0,0,0" FontSize="11" Click="BtnExportCookies_Click"/>
+                                    </UniformGrid>
+                                    <UniformGrid Columns="2" Margin="0,0,0,6">
+                                        <Button Style="{StaticResource FlatButton}" Content="+ .zip / .crx" Padding="6,6" Margin="0,0,4,0" FontSize="11" Click="BtnLoadExtLive_Click"/>
+                                        <Button Style="{StaticResource FlatButton}" Content="+ Unpacked Folder" Padding="6,6" Margin="4,0,0,0" FontSize="11" Click="BtnLoadExtFolderLive_Click"/>
+                                    </UniformGrid>
+                                    <TextBlock x:Name="TrayExtStatus" Text="No extensions loaded" Foreground="{StaticResource Muted}" FontSize="10.5" Margin="0,0,0,6"/>
+                                    <StackPanel x:Name="LoadedExtensionsPanel" Margin="0,0,0,8"/>
+                                    <ComboBox x:Name="CbSearchEngine" Style="{StaticResource DarkCombo}" SelectionChanged="CbSearchEngine_SelectionChanged"/>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Card 5: CDP API & Session Info -->
+                            <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="8" Padding="12">
+                                <StackPanel>
+                                    <TextBlock Text="AUTOMATION API &amp; SESSION" Style="{StaticResource SectionLabel}" Margin="0,0,0,6"/>
+                                    <Grid Margin="0,0,0,8">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="6"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                        <TextBox x:Name="TxtCdpUrl" Grid.Column="0" Style="{StaticResource DarkTextBox}" IsReadOnly="True" FontSize="11"/>
+                                        <Button Grid.Column="2" Style="{StaticResource FlatButton}" Content="Copy" Padding="9,5" FontSize="11" Click="BtnCopyCdp_Click"/>
+                                    </Grid>
+                                    <TextBlock x:Name="TraySessionIp" Text="IP: Direct" Foreground="{StaticResource Green}" FontSize="11.5" FontWeight="SemiBold"/>
+                                    <TextBlock x:Name="TraySessionDevice" Text="" Foreground="{StaticResource Muted}" FontSize="10.5" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+
+                    <!-- TRAY: BOOKMARKS -->
+                    <DockPanel x:Name="TrayBookmarksPanel" Grid.Row="1" Visibility="Collapsed" Margin="12">
+                        <Button DockPanel.Dock="Top" Style="{StaticResource AccentButton}" Content="+ Bookmark Current Page" Margin="0,0,0,10" Click="BtnToggleBookmark_Click"/>
+                        <ListBox x:Name="BookmarksList" Background="Transparent" BorderThickness="0" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid Margin="0,2">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Cursor="Hand" MouseLeftButtonUp="BookmarkItem_Click" Tag="{Binding}">
+                                            <TextBlock Text="{Binding Title}" Foreground="{StaticResource Text}" FontSize="12" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                                            <TextBlock Text="{Binding Url}" Foreground="{StaticResource Muted}" FontSize="10.5" TextTrimming="CharacterEllipsis"/>
+                                        </StackPanel>
+                                        <Button Grid.Column="1" Style="{StaticResource ToolbarIconButton}" Width="22" Height="22" Content="&#x2715;" FontSize="10" Click="BtnRemoveBookmark_Click" Tag="{Binding}"/>
+                                    </Grid>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </DockPanel>
+
+                    <!-- TRAY: HISTORY -->
+                    <DockPanel x:Name="TrayHistoryPanel" Grid.Row="1" Visibility="Collapsed" Margin="12">
+                        <Button DockPanel.Dock="Top" Style="{StaticResource FlatButton}" Content="Clear Browsing History" Margin="0,0,0,10" Click="BtnClearHistory_Click"/>
+                        <ListBox x:Name="HistoryList" Background="Transparent" BorderThickness="0" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Margin="0,3" Cursor="Hand" MouseLeftButtonUp="HistoryItem_Click" Tag="{Binding}">
+                                        <TextBlock Text="{Binding Title}" Foreground="{StaticResource Text}" FontSize="12" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                                        <Grid>
+                                            <TextBlock Text="{Binding Url}" Foreground="{StaticResource Muted}" FontSize="10.5" TextTrimming="CharacterEllipsis" Margin="0,0,50,0"/>
+                                            <TextBlock Text="{Binding VisitedAt}" Foreground="{StaticResource Accent}" FontSize="10" HorizontalAlignment="Right"/>
+                                        </Grid>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </DockPanel>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <!-- ======================= STATUS BAR ======================= -->
+        <Border Grid.Row="5" Background="{StaticResource Surface}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0">
+            <Grid Margin="10,0">
+                <TextBlock x:Name="StatusText" Text="Ready" FontSize="10.5" Foreground="{StaticResource Muted}" VerticalAlignment="Center"/>
+                <TextBlock x:Name="UaStatusText" Text="" FontSize="10.5" Foreground="{StaticResource Muted}" HorizontalAlignment="Right" VerticalAlignment="Center" MaxWidth="520" TextTrimming="CharacterEllipsis"/>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>
