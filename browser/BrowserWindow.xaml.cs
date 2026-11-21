@@ -288,7 +288,7 @@ public partial class BrowserWindow : Window
                 $"--lang={_profile.Language}",
                 "--disable-blink-features=AutomationControlled",
                 "--disable-quic",
-                "--use-fake-ui-for-media-stream",
+                "--auto-accept-camera-and-microphone-capture",
                 $"--remote-debugging-port={_cdpPort}"
             };
 
@@ -571,6 +571,24 @@ public partial class BrowserWindow : Window
             e.State = CoreWebView2PermissionState.Allow;
             e.SavesInProfile = true;
             e.Handled = true;
+            if (e.PermissionKind is CoreWebView2PermissionKind.Camera or CoreWebView2PermissionKind.Microphone &&
+                Uri.TryCreate(e.Uri, UriKind.Absolute, out var pu))
+            {
+                string permOrigin = $"{pu.Scheme}://{pu.Authority}";
+                Dispatcher.BeginInvoke(async () =>
+                {
+                    try
+                    {
+                        var ac = ActiveCore;
+                        if (ac is not null)
+                        {
+                            string gj = JsonSerializer.Serialize(new { origin = permOrigin, permissions = new[] { "videoCapture", "audioCapture" } });
+                            await ac.CallDevToolsProtocolMethodAsync("Browser.grantPermissions", gj);
+                        }
+                    }
+                    catch { }
+                });
+            }
             Dispatcher.BeginInvoke(() =>
             {
                 string host = Uri.TryCreate(e.Uri, UriKind.Absolute, out var u) ? u.Host : e.Uri;
@@ -680,10 +698,17 @@ public partial class BrowserWindow : Window
                         mics: devs.filter(d => d.kind === 'audioinput').map((d, i) => d.label || ('Microphone #' + (i + 1)))
                     };
                 })()";
-                string raw = await core.ExecuteScriptAsync(probeJs);
+                string evalPayload = JsonSerializer.Serialize(new
+                {
+                    expression = probeJs,
+                    awaitPromise = true,
+                    returnByValue = true
+                });
+                string raw = await core.CallDevToolsProtocolMethodAsync("Runtime.evaluate", evalPayload);
                 using var doc = JsonDocument.Parse(raw);
-                var root = doc.RootElement;
-                if (root.ValueKind == JsonValueKind.Object)
+                if (doc.RootElement.TryGetProperty("result", out var resObj) &&
+                    resObj.TryGetProperty("value", out var root) &&
+                    root.ValueKind == JsonValueKind.Object)
                 {
                     if (root.TryGetProperty("camPerm", out var cp)) camState = cp.GetString() ?? camState;
                     if (root.TryGetProperty("micPerm", out var mp)) micState = mp.GetString() ?? micState;
@@ -754,6 +779,12 @@ public partial class BrowserWindow : Window
         {
             await core.Profile.SetPermissionStateAsync(CoreWebView2PermissionKind.Camera, origin, CoreWebView2PermissionState.Allow);
             await core.Profile.SetPermissionStateAsync(CoreWebView2PermissionKind.Microphone, origin, CoreWebView2PermissionState.Allow);
+            try
+            {
+                string grantJson = JsonSerializer.Serialize(new { origin, permissions = new[] { "videoCapture", "audioCapture" } });
+                await core.CallDevToolsProtocolMethodAsync("Browser.grantPermissions", grantJson);
+            }
+            catch { }
             StatusText.Text = $"Camera & Microphone ALLOWED for {origin} — reloading...";
             SitePermissionsBar.Visibility = Visibility.Collapsed;
             core.Reload();
@@ -1062,10 +1093,10 @@ public partial class BrowserWindow : Window
                 _profile.ExtensionPaths.Add(folder);
                 _saveStore();
             }
+            try { await ext.EnableAsync(true); } catch { }
             await RefreshLoadedExtensionsUiAsync(core);
-            StatusText.Text = $"Extension active: {ext.Name}";
-            DarkDialog.ShowInfo(this, "Extension Installed",
-                $"'{ext.Name}' is now active in this profile.\n\nUse the 'Open' button in the right sidebar (Extensions section) anytime to launch its popup/settings.");
+            StatusText.Text = $"Extension active: {ext.Name} — reloading page to inject scripts...";
+            core.Reload();
         }
         catch (Exception ex)
         {
@@ -1078,13 +1109,17 @@ public partial class BrowserWindow : Window
     {
         try
         {
-            var list = await core.Profile.GetBrowserExtensionsAsync();
+            var rawList = await core.Profile.GetBrowserExtensionsAsync();
+            // Hide built-in Edge system component extensions that cannot be removed
+            var list = rawList.Where(x =>
+                !x.Name.Equals("Microsoft Clipboard Extension", StringComparison.OrdinalIgnoreCase) &&
+                !x.Name.Equals("Microsoft Edge PDF Viewer", StringComparison.OrdinalIgnoreCase)).ToList();
             Dispatcher.Invoke(() =>
             {
                 LoadedExtensionsPanel.Children.Clear();
                 if (list.Count == 0)
                 {
-                    TrayExtStatus.Text = "No extensions loaded";
+                    TrayExtStatus.Text = "No user extensions loaded";
                     return;
                 }
                 TrayExtStatus.Text = $"{list.Count} active extension(s) — click Open for popup";
@@ -1985,9 +2020,16 @@ try {{
               }}
             }} catch {{}}
           }}
-          return origGUM(c);
+          try {{
+            return await origGUM(c);
+          }} catch (err) {{
+            if (err && (err.name === 'OverconstrainedError' || err.name === 'NotFoundError')) {{
+              return await origGUM({{ video: !!c.video, audio: !!c.audio }});
+            }}
+            throw err;
+          }}
         }}
-        return origGUM(constraints);
+        return await origGUM(constraints);
       }};
     }}
   }}
@@ -2370,7 +2412,14 @@ try {{
         input = input.Trim();
         if (string.IsNullOrEmpty(input)) return "https://whoer.net";
         if (input.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
-            input.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            input.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
+            input.StartsWith("chrome-extension://", StringComparison.OrdinalIgnoreCase) ||
+            input.StartsWith("extension://", StringComparison.OrdinalIgnoreCase) ||
+            input.StartsWith("chrome://", StringComparison.OrdinalIgnoreCase) ||
+            input.StartsWith("edge://", StringComparison.OrdinalIgnoreCase) ||
+            input.StartsWith("about:", StringComparison.OrdinalIgnoreCase) ||
+            input.StartsWith("file://", StringComparison.OrdinalIgnoreCase) ||
+            input.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
             return input;
         if (!input.Contains(' ') && input.Contains('.'))
             return "https://" + input;

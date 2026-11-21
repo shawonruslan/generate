@@ -58,11 +58,13 @@ public partial class App : Application
     /// Assigns an independent Windows Taskbar AppUserModelID to a window so Browser windows
     /// appear under their own dedicated Browser icon on the Taskbar, separate from the Hub.
     /// </summary>
-    public static void SetWindowAppUserModelId(Window window, string appId)
+    public static void SetWindowAppUserModelId(Window window, string appId) =>
+        SetHwndAppUserModelId(new WindowInteropHelper(window).Handle, appId);
+
+    public static void SetHwndAppUserModelId(IntPtr hwnd, string appId)
     {
         try
         {
-            var hwnd = new WindowInteropHelper(window).Handle;
             if (hwnd == IntPtr.Zero) return;
             var iid = new Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99");
             if (SHGetPropertyStoreForWindow(hwnd, ref iid, out var store) != 0 || store is null) return;

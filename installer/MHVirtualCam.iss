@@ -1,5 +1,5 @@
 #define MyAppName "MH Advanced Tool"
-#define MyAppVersion "4.4.7"
+#define MyAppVersion "5.0.0"
 #define MyAppExeName "MHVirtualCam.exe"
 #define MyHubExeName "browser\MHBrowser.exe"
 
@@ -41,6 +41,7 @@ Source: "..\mf\x64\Release\MHVirtualCamReg.exe"; DestDir: "{app}\mf"; Flags: ign
 Source: "..\publish_browser\*"; DestDir: "{app}\browser"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\vpn\openvpn\*"; DestDir: "{app}\vpn\openvpn"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
 Source: "..\vpn\wireguard\*"; DestDir: "{app}\vpn\wireguard"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
+Source: "..\chromium\*"; DestDir: "{app}\chromium"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyHubExeName}"

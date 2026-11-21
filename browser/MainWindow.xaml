@@ -64,9 +64,10 @@
 
                 <Border DockPanel.Dock="Bottom" Background="{StaticResource Panel}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="8" Padding="12">
                     <StackPanel>
-                        <TextBlock Text="SUITE STATUS" Foreground="{StaticResource Muted}" FontSize="10" FontWeight="SemiBold"/>
-                        <TextBlock Text="Chromium + VirtualCam" Foreground="{StaticResource Green}" FontSize="12" FontWeight="SemiBold" Margin="0,4,0,0"/>
-                        <TextBlock x:Name="SidebarCountText" Text="0 Profiles" Foreground="{StaticResource Muted}" FontSize="11" Margin="0,2,0,0"/>
+                        <TextBlock Text="REAL CHROMIUM ENGINE" Foreground="{StaticResource Muted}" FontSize="10" FontWeight="SemiBold"/>
+                        <TextBlock x:Name="ChromiumStatusText" Text="Checking Chromium..." Foreground="{StaticResource Green}" FontSize="11.5" FontWeight="SemiBold" Margin="0,4,0,0" TextTrimming="CharacterEllipsis"/>
+                        <TextBlock x:Name="SidebarCountText" Text="0 Profiles" Foreground="{StaticResource Muted}" FontSize="11" Margin="0,2,0,6"/>
+                        <Button x:Name="BtnUpdateChromium" Style="{StaticResource FlatButton}" Content="Check Engine Update" Padding="8,4" FontSize="10.5" Click="BtnUpdateChromium_Click"/>
                     </StackPanel>
                 </Border>
                 <Grid/>

@@ -279,6 +279,11 @@ public static class ExtensionHelper
                     if (!string.IsNullOrWhiteSpace(p)) return p.TrimStart('/');
                 }
             }
+            if (root.TryGetProperty("side_panel", out var sp) && sp.TryGetProperty("default_path", out var spPath))
+            {
+                var p = spPath.GetString();
+                if (!string.IsNullOrWhiteSpace(p)) return p.TrimStart('/');
+            }
             if (root.TryGetProperty("options_ui", out var optUi) && optUi.TryGetProperty("page", out var optPage))
             {
                 var p = optPage.GetString();

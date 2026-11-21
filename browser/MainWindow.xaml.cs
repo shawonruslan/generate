@@ -13,7 +13,7 @@ public partial class MainWindow : Window
     private readonly ObservableCollection<BrowserProfile> _allProfiles = new();
     private readonly ObservableCollection<BrowserProfile> _filteredProfiles = new();
     private readonly ObservableCollection<SavedProxy> _proxies = new();
-    private readonly Dictionary<string, BrowserWindow> _openWindows = new();
+    private readonly Dictionary<string, RealChromiumSession> _openSessions = new();
     private bool _updatingGroups;
     private CloudSyncConfig _cloudConfig = new();
 
@@ -33,6 +33,8 @@ public partial class MainWindow : Window
         TxtR2SecretKey.Text = _cloudConfig.SecretAccessKey;
         TxtR2Password.Text = _cloudConfig.SyncPassword;
         ChkR2AutoSync.IsChecked = _cloudConfig.AutoSyncOnClose;
+        ChromiumStatusText.Text = $"Chromium v{ChromiumManager.GetInstalledVersion()}";
+        Loaded += async (_, _) => await RunChromiumAutoUpdateAsync(silent: true);
         SetActiveView("Apps");
     }
 
@@ -200,10 +202,29 @@ public partial class MainWindow : Window
 
     private async Task LaunchProfileAsync(BrowserProfile profile)
     {
-        if (_openWindows.TryGetValue(profile.Id, out var existing) && existing.IsLoaded)
+        if (_openSessions.TryGetValue(profile.Id, out var existing) && existing.IsRunning)
         {
             existing.Activate();
             return;
+        }
+
+        ChromiumManager.ApplyPendingUpdateIfSafe(_openSessions.Values.Any(s => s.IsRunning));
+        string? chromiumExe = ChromiumManager.FindChromiumExe();
+        if (string.IsNullOrEmpty(chromiumExe))
+        {
+            var dlBusy = new DarkDialog("Downloading Real Chromium", "Downloading official Chromium engine (first-time setup)...", isBusy: true) { Owner = this };
+            dlBusy.Show();
+            var (_, ver, dlMsg) = await ChromiumManager.CheckAndAutoUpdateAsync(
+                () => _openSessions.Values.Any(s => s.IsRunning),
+                st => Dispatcher.Invoke(() => { dlBusy.UpdateMessage(st); ChromiumStatusText.Text = st; }));
+            dlBusy.Close();
+            chromiumExe = ChromiumManager.FindChromiumExe();
+            ChromiumStatusText.Text = $"Chromium v{ver}";
+            if (string.IsNullOrEmpty(chromiumExe))
+            {
+                DarkDialog.ShowInfo(this, "Chromium Engine Required", $"Could not locate or download Chromium:\n{dlMsg}");
+                return;
+            }
         }
 
         var busy = new DarkDialog($"Connecting '{profile.Name}'", "Preparing isolated profile connection...", isBusy: true) { Owner = this };
@@ -294,22 +315,32 @@ public partial class MainWindow : Window
             busy.Close();
 
             var conn = new VerifiedConnection(vpnSession, socksFwd, localSocksPort, exitIp, exitLoc, exitTz, lat, lon);
-            var win = new BrowserWindow(profile, conn, () => ProfileStore.Save(_allProfiles));
-            win.Closed += async (_, _) =>
+            var session = new RealChromiumSession(profile, conn);
+            if (!session.Launch(chromiumExe, out string launchErr))
             {
-                _openWindows.Remove(profile.Id);
+                session.Dispose();
+                DarkDialog.ShowInfo(this, "Launch Failed", $"Could not start Real Chromium:\n{launchErr}");
+                return;
+            }
+            session.Exited += () => Dispatcher.BeginInvoke(async () =>
+            {
+                _openSessions.Remove(profile.Id);
+                profile.IsRunning = false;
+                profile.NotifyAll();
+                ProfileStore.Save(_allProfiles);
+                ChromiumManager.ApplyPendingUpdateIfSafe(_openSessions.Values.Any(s => s.IsRunning));
                 if (_cloudConfig.AutoSyncOnClose && _cloudConfig.IsConfigured)
                 {
                     StatusText.Text = $"Auto-syncing '{profile.Name}' to Cloudflare R2...";
                     var (okSync, msgSync) = await CloudflareR2Sync.PushProfileAsync(_cloudConfig, profile);
                     StatusText.Text = okSync ? msgSync : $"Auto-sync warning: {msgSync}";
                 }
-            };
-            _openWindows[profile.Id] = win;
-            win.Show();
+            });
+            _openSessions[profile.Id] = session;
+            profile.NotifyAll();
             StatusText.Text = string.IsNullOrWhiteSpace(exitIp)
-                ? $"Launched '{profile.Name}'"
-                : $"Launched '{profile.Name}' | Exit IP: {exitIp} ({exitLoc})";
+                ? $"Launched Real Chromium '{profile.Name}'"
+                : $"Launched Real Chromium '{profile.Name}' | Exit IP: {exitIp} ({exitLoc})";
         }
         catch (Exception ex)
         {
@@ -430,7 +461,7 @@ public partial class MainWindow : Window
             $"Delete profile '{profile.Name}' and all its saved browser data?",
             yesText: "Delete", noText: "Cancel", danger: true)) return;
 
-        if (_openWindows.TryGetValue(profile.Id, out var win)) { win.Close(); _openWindows.Remove(profile.Id); }
+        if (_openSessions.TryGetValue(profile.Id, out var sess)) { sess.CloseBrowser(); sess.Dispose(); _openSessions.Remove(profile.Id); }
         _allProfiles.Remove(profile);
         ProfileStore.Save(_allProfiles);
         try { if (Directory.Exists(profile.UserDataDir)) Directory.Delete(profile.UserDataDir, true); } catch { }
@@ -546,5 +577,60 @@ public partial class MainWindow : Window
 
         RefreshGroupsCombo();
         RefreshFilter();
+    }
+
+    private async void BtnUpdateChromium_Click(object sender, RoutedEventArgs e) =>
+        await RunChromiumAutoUpdateAsync(silent: false);
+
+    private async Task RunChromiumAutoUpdateAsync(bool silent)
+    {
+        BtnUpdateChromium.IsEnabled = false;
+        try
+        {
+            var (updated, ver, msg) = await ChromiumManager.CheckAndAutoUpdateAsync(
+                () => _openSessions.Values.Any(s => s.IsRunning),
+                st => Dispatcher.Invoke(() => { ChromiumStatusText.Text = st; StatusText.Text = st; }));
+            ChromiumStatusText.Text = $"Chromium v{ver}";
+            if (updated || !silent)
+                StatusText.Text = msg;
+            if (!silent && !updated)
+                DarkDialog.ShowInfo(this, "Chromium Engine", msg);
+        }
+        finally
+        {
+            BtnUpdateChromium.IsEnabled = true;
+        }
+    }
+
+    private void BtnInspectProfile_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as Button)?.Tag is not BrowserProfile p) return;
+        if (_openSessions.TryGetValue(p.Id, out var session) && session.IsRunning)
+        {
+            session.OpenInspector();
+            StatusText.Text = $"Opened Reqable/Fiddler Inspector for '{p.Name}' (CDP:{session.CdpPort})";
+        }
+        else
+        {
+            DarkDialog.ShowInfo(this, "Inspector", $"Launch '{p.Name}' first, then click Inspect to capture live network traffic.");
+        }
+    }
+
+    private void TileRunningChromiumSessions()
+    {
+        var active = _openSessions.Values.Where(s => s.IsRunning).ToList();
+        if (active.Count == 0) return;
+        var wa = SystemParameters.WorkArea;
+        int cols = (int)Math.Ceiling(Math.Sqrt(active.Count));
+        int rows = (int)Math.Ceiling((double)active.Count / cols);
+        int cellW = (int)(wa.Width / cols);
+        int cellH = (int)(wa.Height / rows);
+        for (int i = 0; i < active.Count; i++)
+        {
+            int c = i % cols;
+            int r = i / cols;
+            active[i].MoveToBounds((int)wa.Left + c * cellW, (int)wa.Top + r * cellH, cellW, cellH);
+        }
+        StatusText.Text = $"Tiled {active.Count} Real Chromium window(s).";
     }
 }

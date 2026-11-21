@@ -158,9 +158,13 @@
             <Border x:Name="SitePermissionsBar" Background="#FF14181F" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1" Visibility="Collapsed" Padding="12,7">
                 <StackPanel>
                     <Grid Margin="0,0,0,6">
-                        <TextBlock x:Name="SitePermissionsOriginText" Text="Site Permissions"
-                                   Foreground="{StaticResource Text}" FontSize="11.5" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,460,0" TextTrimming="CharacterEllipsis"/>
-                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="SitePermissionsOriginText" Grid.Column="0" Text="Site Permissions"
+                                   Foreground="{StaticResource Text}" FontSize="11.5" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,12,0" TextTrimming="CharacterEllipsis"/>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
                             <Button Style="{StaticResource GreenButton}" Content="Allow Cam &amp; Mic + Reload" Padding="10,3" FontSize="11" Margin="0,0,6,0" Click="BtnSiteAllowCamMic_Click"/>
                             <Button Style="{StaticResource FlatButton}" Content="Block Cam &amp; Mic" Padding="10,3" FontSize="11" Margin="0,0,6,0" Click="BtnSiteBlockCamMic_Click"/>
                             <Button Style="{StaticResource FlatButton}" Content="Allow Location" Padding="10,3" FontSize="11" Margin="0,0,6,0" Click="BtnSiteAllowLoc_Click"/>
