@@ -1,4 +1,7 @@
 using Microsoft.Win32;
+using System.Runtime.InteropServices;
+using System.Windows.Interop;
+using System.Windows.Threading;
 using System.IO;
 using System.Text;
 using System.Text.Json;
@@ -15,6 +18,16 @@ public partial class ProfileToolsDockWindow : Window
     private bool _expanded;
     private bool _loadingGeo;
     private bool _cookieRobotRunning;
+    private DispatcherTimer? _followTimer;
+
+    [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] private static extern bool IsIconic(IntPtr hWnd);
+    [DllImport("user32.dll")] private static extern bool IsWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT { public int Left, Top, Right, Bottom; }
 
     public ProfileToolsDockWindow(RealChromiumSession session, Action saveStore)
     {
@@ -46,25 +59,89 @@ public partial class ProfileToolsDockWindow : Window
             TxtGeoStatus.Text = $"Active GPS: {lat:F4}, {lon:F4} (±{acc:F0}m)";
         }
 
-        Loaded += (_, _) => SnapToRightEdge();
+        Loaded += (_, _) =>
+        {
+            SnapToRightEdge();
+            StartWindowFollowLoop();
+        };
+        Closed += (_, _) => _followTimer?.Stop();
+    }
+
+    private void StartWindowFollowLoop()
+    {
+        _followTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(220) };
+        _followTimer.Tick += (_, _) =>
+        {
+            if (!_session.IsRunning)
+            {
+                _followTimer.Stop();
+                Close();
+                return;
+            }
+            var chromeHwnd = _session.MainHwnd;
+            if (chromeHwnd == IntPtr.Zero || !IsWindow(chromeHwnd))
+                return;
+
+            // Hide immediately when Chromium is minimized or not in the foreground (so it NEVER floats over desktop/other apps)
+            if (IsIconic(chromeHwnd))
+            {
+                if (Visibility == Visibility.Visible) Hide();
+                return;
+            }
+
+            IntPtr fg = GetForegroundWindow();
+            IntPtr myHwnd = new WindowInteropHelper(this).Handle;
+            bool isChromeOrDockFocused = fg == chromeHwnd || fg == myHwnd;
+            if (!isChromeOrDockFocused && fg != IntPtr.Zero && _session.ChromeProcessId > 0)
+            {
+                GetWindowThreadProcessId(fg, out uint fgPid);
+                if (fgPid == (uint)_session.ChromeProcessId) isChromeOrDockFocused = true;
+            }
+
+            if (!isChromeOrDockFocused)
+            {
+                if (Visibility == Visibility.Visible) Hide();
+                return;
+            }
+
+            if (Visibility != Visibility.Visible) Show();
+            SnapToRightEdge();
+        };
+        _followTimer.Start();
     }
 
     private void SnapToRightEdge()
     {
         var wa = SystemParameters.WorkArea;
+        double rightEdge = wa.Right;
+        double topEdge = wa.Top;
+        double availH = wa.Height;
+
+        var chromeHwnd = _session.MainHwnd;
+        if (chromeHwnd != IntPtr.Zero && IsWindow(chromeHwnd) && GetWindowRect(chromeHwnd, out var rc) && rc.Right > rc.Left)
+        {
+            // Convert physical pixels to WPF DIPs
+            var src = PresentationSource.FromVisual(this);
+            double scaleX = src?.CompositionTarget?.TransformFromDevice.M11 ?? 1.0;
+            double scaleY = src?.CompositionTarget?.TransformFromDevice.M22 ?? 1.0;
+            rightEdge = Math.Min(wa.Right, rc.Right * scaleX);
+            topEdge = Math.Max(wa.Top, rc.Top * scaleY);
+            availH = Math.Max(200, (rc.Bottom - rc.Top) * scaleY);
+        }
+
         if (_expanded)
         {
             Width = 315;
-            Height = Math.Min(690, wa.Height - 40);
-            Left = wa.Right - Width;
-            Top = wa.Top + (wa.Height - Height) / 2;
+            Height = Math.Min(690, availH - 40);
+            Left = rightEdge - Width;
+            Top = topEdge + (availH - Height) / 2;
         }
         else
         {
             Width = 34;
             Height = 118;
-            Left = wa.Right - Width;
-            Top = wa.Top + (wa.Height - Height) / 2;
+            Left = rightEdge - Width;
+            Top = topEdge + (availH - Height) / 2;
         }
     }
 

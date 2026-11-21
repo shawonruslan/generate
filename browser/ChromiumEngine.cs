@@ -220,6 +220,7 @@ public sealed class RealChromiumSession : IDisposable
     public VerifiedConnection Connection { get; }
     public int CdpPort { get; }
     public IntPtr MainHwnd { get; private set; }
+    public int ChromeProcessId => _proc is not null && !_proc.HasExited ? _proc.Id : 0;
     public bool IsRunning => _proc is not null && !_proc.HasExited;
 
     private Process? _proc;
@@ -330,6 +331,8 @@ public sealed class RealChromiumSession : IDisposable
                     UseShellExecute = false
                 }
             };
+            if (!string.IsNullOrWhiteSpace(Connection.Timezone))
+                _proc.StartInfo.Environment["TZ"] = Connection.Timezone;
             _proc.StartInfo.Environment["GOOGLE_API_KEY"] = "no";
             _proc.StartInfo.Environment["GOOGLE_DEFAULT_CLIENT_ID"] = "no";
             _proc.StartInfo.Environment["GOOGLE_DEFAULT_CLIENT_SECRET"] = "no";
@@ -399,10 +402,13 @@ public sealed class RealChromiumSession : IDisposable
                 return;
             }
             _inspectorBridge?.Dispose();
-            _inspectorBridge = new CdpInspectorBridge(CdpPort, _capturedNet, _internalEvents);
+            _inspectorBridge = new CdpInspectorBridge(CdpPort, _capturedNet, _recordedUi, _internalEvents);
             _inspectorWindow = new InspectorWindow(
                 Profile.Name, _capturedNet, _recordedUi, _internalEvents,
                 reqId => _inspectorBridge.FetchResponseBodyAsync(reqId));
+            _inspectorWindow.ConfigureTabPicker(
+                () => CdpInspectorBridge.ListOpenTabsAsync(CdpPort),
+                async (wsUrl, title) => await _inspectorBridge.AttachToSpecificTabAsync(wsUrl));
             _inspectorWindow.Closed += (_, _) =>
             {
                 _inspectorBridge?.Dispose();
@@ -410,7 +416,6 @@ public sealed class RealChromiumSession : IDisposable
                 _inspectorWindow = null;
             };
             _inspectorWindow.Show();
-            _ = _inspectorBridge.StartAsync();
         });
     }
 
@@ -701,6 +706,64 @@ public sealed class RealChromiumSession : IDisposable
         sb.AppendLine($"try {{ Object.defineProperty(navigator, 'hardwareConcurrency', {{ get: () => {Math.Max(2, Profile.HardwareConcurrency)} }}); }} catch {{}}");
         sb.AppendLine($"try {{ Object.defineProperty(navigator, 'deviceMemory', {{ get: () => {Math.Max(2, Profile.DeviceMemoryGb)} }}); }} catch {{}}");
 
+        // Strong JS Timezone spoof so Date(), getTimezoneOffset(), toString(), and Intl.DateTimeFormat all match the profile/proxy Timezone (fixes whoer.net System Time mismatch!)
+        if (!string.IsNullOrWhiteSpace(Connection.Timezone))
+        {
+            string tzJson = JsonSerializer.Serialize(Connection.Timezone);
+            sb.AppendLine($@"
+try {{
+  const targetTz = {tzJson};
+  const OrigDTF = Intl.DateTimeFormat;
+  const getOffsetMin = (date) => {{
+    try {{
+      const dtf = new OrigDTF('en-US', {{ timeZone: targetTz, year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false }});
+      const parts = {{}};
+      for (const p of dtf.formatToParts(date)) parts[p.type] = p.value;
+      const asUtc = Date.UTC(+parts.year, +parts.month - 1, +parts.day, (+parts.hour) % 24, +parts.minute, +parts.second);
+      return Math.round((date.getTime() - asUtc) / 60000);
+    }} catch {{ return 0; }}
+  }};
+  const getTzAbbr = (date) => {{
+    try {{
+      const s = new OrigDTF('en-US', {{ timeZone: targetTz, timeZoneName: 'long' }}).formatToParts(date).find(p => p.type === 'timeZoneName');
+      return s ? s.value : targetTz;
+    }} catch {{ return targetTz; }}
+  }};
+  const OrigResolved = OrigDTF.prototype.resolvedOptions;
+  OrigDTF.prototype.resolvedOptions = function() {{
+    const r = OrigResolved.call(this);
+    if (!this.__mhHasExplicitTz) r.timeZone = targetTz;
+    return r;
+  }};
+  window.Intl.DateTimeFormat = function(locales, options) {{
+    const opts = options ? Object.assign({{}}, options) : {{}};
+    const explicit = !!opts.timeZone;
+    if (!explicit) opts.timeZone = targetTz;
+    const inst = new OrigDTF(locales, opts);
+    inst.__mhHasExplicitTz = explicit;
+    return inst;
+  }};
+  window.Intl.DateTimeFormat.prototype = OrigDTF.prototype;
+  window.Intl.DateTimeFormat.supportedLocalesOf = OrigDTF.supportedLocalesOf;
+
+  Date.prototype.getTimezoneOffset = function() {{ return getOffsetMin(this); }};
+  const pad2 = (n) => String(n).padStart(2, '0');
+  Date.prototype.toString = function() {{
+    const off = getOffsetMin(this);
+    const sign = off <= 0 ? '+' : '-';
+    const abs = Math.abs(off);
+    const gmt = 'GMT' + sign + pad2(Math.floor(abs / 60)) + pad2(abs % 60);
+    const p = {{}};
+    for (const x of new OrigDTF('en-US', {{ timeZone: targetTz, weekday:'short', month:'short', day:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false }}).formatToParts(this)) p[x.type] = x.value;
+    return `${{p.weekday}} ${{p.month}} ${{p.day}} ${{p.year}} ${{pad2((+p.hour)%24)}}:${{p.minute}}:${{p.second}} ${{gmt}} (${{getTzAbbr(this)}})`;
+  }};
+  Date.prototype.toTimeString = function() {{
+    const s = this.toString();
+    return s.split(' ').slice(4).join(' ');
+  }};
+}} catch {{}}");
+        }
+
         if (Profile.WebGlSpoof)
         {
             sb.AppendLine($@"
@@ -905,54 +968,158 @@ public sealed class CdpInspectorBridge : IDisposable
 {
     private readonly int _port;
     private readonly ObservableCollection<CapturedNetRequest> _net;
+    private readonly ObservableCollection<RecordedUiAction> _ui;
     private readonly ObservableCollection<InternalSecurityEvent> _internals;
     private readonly Dictionary<string, CapturedNetRequest> _byId = new();
     private readonly Dictionary<int, TaskCompletionSource<string>> _pendingRpc = new();
     private ClientWebSocket? _ws;
-    private readonly CancellationTokenSource _cts = new();
-    private int _rpcSeq = 10;
+    private CancellationTokenSource _cts = new();
+    private int _rpcSeq = 20;
 
-    public CdpInspectorBridge(int port, ObservableCollection<CapturedNetRequest> net, ObservableCollection<InternalSecurityEvent> internals)
+    public CdpInspectorBridge(
+        int port,
+        ObservableCollection<CapturedNetRequest> net,
+        ObservableCollection<RecordedUiAction> ui,
+        ObservableCollection<InternalSecurityEvent> internals)
     {
         _port = port;
         _net = net;
+        _ui = ui;
         _internals = internals;
     }
 
-    public static async Task<string?> GetFirstPageWsUrlAsync(int port, CancellationToken ct)
+    public static async Task<List<(string Id, string Title, string Url, string WsUrl)>> ListOpenTabsAsync(int port)
     {
+        var list = new List<(string, string, string, string)>();
         try
         {
             using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
-            string json = await http.GetStringAsync($"http://127.0.0.1:{port}/json", ct);
+            string json = await http.GetStringAsync($"http://127.0.0.1:{port}/json");
             using var doc = JsonDocument.Parse(json);
             foreach (var el in doc.RootElement.EnumerateArray())
             {
                 if (el.TryGetProperty("type", out var t) && t.GetString() == "page" &&
-                    el.TryGetProperty("webSocketDebuggerUrl", out var ws))
-                    return ws.GetString();
+                    el.TryGetProperty("webSocketDebuggerUrl", out var wsEl))
+                {
+                    string id = el.TryGetProperty("id", out var iEl) ? (iEl.GetString() ?? "") : "";
+                    string title = el.TryGetProperty("title", out var ttEl) ? (ttEl.GetString() ?? "") : "";
+                    string url = el.TryGetProperty("url", out var uEl) ? (uEl.GetString() ?? "") : "";
+                    string ws = wsEl.GetString() ?? "";
+                    if (!string.IsNullOrEmpty(ws) && !url.StartsWith("devtools://", StringComparison.OrdinalIgnoreCase))
+                        list.Add((id, title, url, ws));
+                }
             }
         }
         catch { }
-        return null;
+        return list;
     }
 
-    public async Task StartAsync()
+    public static async Task<string?> GetFirstPageWsUrlAsync(int port, CancellationToken ct)
     {
+        var tabs = await ListOpenTabsAsync(port);
+        return tabs.Count > 0 ? tabs[0].WsUrl : null;
+    }
+
+    public async Task AttachToSpecificTabAsync(string wsUrl)
+    {
+        try { _cts.Cancel(); } catch { }
+        try { _ws?.Dispose(); } catch { }
+        _ws = null;
+        _cts = new CancellationTokenSource();
+
         try
         {
-            string? wsUrl = await GetFirstPageWsUrlAsync(_port, _cts.Token);
-            if (string.IsNullOrEmpty(wsUrl)) return;
-
             _ws = new ClientWebSocket();
             await _ws.ConnectAsync(new Uri(wsUrl), _cts.Token);
+
             await SendRawAsync(JsonSerializer.Serialize(new { id = 1, method = "Network.enable", @params = new { } }));
             await SendRawAsync(JsonSerializer.Serialize(new { id = 2, method = "Audits.enable", @params = new { } }));
+            await SendRawAsync(JsonSerializer.Serialize(new { id = 3, method = "Runtime.enable", @params = new { } }));
+            await SendRawAsync(JsonSerializer.Serialize(new { id = 4, method = "Page.enable", @params = new { } }));
+            await SendRawAsync(JsonSerializer.Serialize(new { id = 5, method = "Runtime.addBinding", @params = new { name = "__mhUiRecord" } }));
 
-            _ = Task.Run(ReceiveLoopAsync);
+            string uiScript = BuildUiRecorderScript();
+            await SendRawAsync(JsonSerializer.Serialize(new { id = 6, method = "Page.addScriptToExecuteOnNewDocument", @params = new { source = uiScript } }));
+            await SendRawAsync(JsonSerializer.Serialize(new { id = 7, method = "Runtime.evaluate", @params = new { expression = uiScript } }));
+
+            _ = Task.Run(() => ReceiveLoopAsync(_cts.Token));
         }
         catch { }
     }
+
+    private static string BuildUiRecorderScript() => @"(() => {
+  if (window.__mhUiRecInstalled) return;
+  window.__mhUiRecInstalled = true;
+  const esc = (s) => (s || '').replace(/""/g, '\\""');
+  const getCss = (el) => {
+    if (!el || el.nodeType !== 1) return '';
+    if (el.id) return '#' + CSS.escape(el.id);
+    if (el.getAttribute && el.getAttribute('data-testid')) return '[data-testid=""' + esc(el.getAttribute('data-testid')) + '""]';
+    const parts = [];
+    let cur = el;
+    while (cur && cur.nodeType === 1 && parts.length < 4) {
+      let s = cur.tagName.toLowerCase();
+      if (cur.name) { s += '[name=""' + esc(cur.name) + '""]'; parts.unshift(s); break; }
+      const sibs = cur.parentElement ? Array.from(cur.parentElement.children).filter(c => c.tagName === cur.tagName) : [];
+      if (sibs.length > 1) s += ':nth-of-type(' + (sibs.indexOf(cur) + 1) + ')';
+      parts.unshift(s);
+      cur = cur.parentElement;
+    }
+    return parts.join(' > ');
+  };
+  const getSmartXPath = (el) => {
+    if (!el || el.nodeType !== 1) return '';
+    if (el.id) return '//*[@id=""' + el.id + '""]';
+    if (el.getAttribute && el.getAttribute('data-testid')) return '//*[@data-testid=""' + el.getAttribute('data-testid') + '""]';
+    if (el.name) return '//' + el.tagName.toLowerCase() + '[@name=""' + el.name + '""]';
+    if (el.getAttribute && el.getAttribute('aria-label')) return '//' + el.tagName.toLowerCase() + '[@aria-label=""' + el.getAttribute('aria-label') + '""]';
+    return getFullXPath(el);
+  };
+  const getFullXPath = (el) => {
+    const segs = [];
+    let cur = el;
+    while (cur && cur.nodeType === 1) {
+      let idx = 1, sib = cur.previousElementSibling;
+      while (sib) { if (sib.tagName === cur.tagName) idx++; sib = sib.previousElementSibling; }
+      segs.unshift(cur.tagName.toLowerCase() + '[' + idx + ']');
+      cur = cur.parentElement;
+    }
+    return '/' + segs.join('/');
+  };
+  const emit = (action, el, val) => {
+    try {
+      if (typeof window.__mhUiRecord !== 'function') return;
+      const r = el && el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+      window.__mhUiRecord(JSON.stringify({
+        action,
+        tag: el ? el.tagName : '',
+        selector: getCss(el),
+        xpath: getSmartXPath(el),
+        fullXpath: getFullXPath(el),
+        id: (el && el.id) || '',
+        name: (el && el.name) || '',
+        aria: (el && el.getAttribute && el.getAttribute('aria-label')) || '',
+        testid: (el && el.getAttribute && el.getAttribute('data-testid')) || '',
+        bounds: r ? (Math.round(r.x) + ',' + Math.round(r.y) + ' ' + Math.round(r.width) + 'x' + Math.round(r.height)) : '',
+        value: (val || '').toString().slice(0, 180),
+        url: location.href
+      }));
+    } catch {}
+  };
+  document.addEventListener('click', (e) => {
+    const t = e.target;
+    if (!t || t.id === '__mh_profile_badge_host') return;
+    emit('CLICK', t, (t.innerText || t.value || '').trim().slice(0, 80));
+  }, true);
+  document.addEventListener('change', (e) => {
+    const t = e.target;
+    if (!t) return;
+    if (t.tagName === 'SELECT') emit('SELECT', t, t.options[t.selectedIndex] ? t.options[t.selectedIndex].text : t.value);
+    else if (t.type === 'checkbox' || t.type === 'radio') emit('CHECK', t, t.checked ? 'checked' : 'unchecked');
+    else emit('WRITE', t, t.type === 'password' ? '******' : (t.value || ''));
+  }, true);
+  document.addEventListener('submit', (e) => emit('SUBMIT', e.target, ''), true);
+})();";
 
     public async Task<string> FetchResponseBodyAsync(string requestId)
     {
@@ -977,11 +1144,11 @@ public sealed class CdpInspectorBridge : IDisposable
         await _ws.SendAsync(Encoding.UTF8.GetBytes(json), WebSocketMessageType.Text, true, _cts.Token);
     }
 
-    private async Task ReceiveLoopAsync()
+    private async Task ReceiveLoopAsync(CancellationToken ct)
     {
         var buf = new byte[65536];
         using var ms = new MemoryStream();
-        while (_ws is not null && _ws.State == WebSocketState.Open && !_cts.IsCancellationRequested)
+        while (_ws is not null && _ws.State == WebSocketState.Open && !ct.IsCancellationRequested)
         {
             try
             {
@@ -989,7 +1156,7 @@ public sealed class CdpInspectorBridge : IDisposable
                 WebSocketReceiveResult res;
                 do
                 {
-                    res = await _ws.ReceiveAsync(buf, _cts.Token);
+                    res = await _ws.ReceiveAsync(buf, ct);
                     if (res.MessageType == WebSocketMessageType.Close) return;
                     ms.Write(buf, 0, res.Count);
                 } while (!res.EndOfMessage);
@@ -1023,6 +1190,38 @@ public sealed class CdpInspectorBridge : IDisposable
             if (!root.TryGetProperty("method", out var mEl)) return;
             string method = mEl.GetString() ?? "";
             if (!root.TryGetProperty("params", out var p)) return;
+
+            if (method == "Runtime.bindingCalled" &&
+                p.TryGetProperty("name", out var bn) && bn.GetString() == "__mhUiRecord" &&
+                p.TryGetProperty("payload", out var payEl))
+            {
+                string payload = payEl.GetString() ?? "";
+                if (string.IsNullOrEmpty(payload)) return;
+                using var udoc = JsonDocument.Parse(payload);
+                var u = udoc.RootElement;
+                var act = new RecordedUiAction
+                {
+                    Time = DateTime.Now.ToString("HH:mm:ss"),
+                    Action = u.TryGetProperty("action", out var a) ? (a.GetString() ?? "CLICK") : "CLICK",
+                    Tag = u.TryGetProperty("tag", out var tg) ? (tg.GetString() ?? "") : "",
+                    Selector = u.TryGetProperty("selector", out var sl) ? (sl.GetString() ?? "") : "",
+                    XPath = u.TryGetProperty("xpath", out var xp) ? (xp.GetString() ?? "") : "",
+                    FullXPath = u.TryGetProperty("fullXpath", out var fxp) ? (fxp.GetString() ?? "") : "",
+                    ElementId = u.TryGetProperty("id", out var eid) ? (eid.GetString() ?? "") : "",
+                    ElementName = u.TryGetProperty("name", out var en) ? (en.GetString() ?? "") : "",
+                    AriaLabel = u.TryGetProperty("aria", out var ar) ? (ar.GetString() ?? "") : "",
+                    DataTestId = u.TryGetProperty("testid", out var tid) ? (tid.GetString() ?? "") : "",
+                    Bounds = u.TryGetProperty("bounds", out var bd) ? (bd.GetString() ?? "") : "",
+                    Value = u.TryGetProperty("value", out var vl) ? (vl.GetString() ?? "") : "",
+                    PageUrl = u.TryGetProperty("url", out var pu) ? (pu.GetString() ?? "") : ""
+                };
+                Application.Current.Dispatcher.BeginInvoke(() =>
+                {
+                    _ui.Insert(0, act);
+                    if (_ui.Count > 500) _ui.RemoveAt(_ui.Count - 1);
+                });
+                return;
+            }
 
             if (method == "Network.requestWillBeSent" && p.TryGetProperty("request", out var reqEl))
             {

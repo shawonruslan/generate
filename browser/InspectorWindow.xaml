@@ -12,9 +12,10 @@
             <RowDefinition Height="24"/>
         </Grid.RowDefinitions>
 
-        <!-- ======================= TOP TOOLBAR ======================= -->
-        <Border Grid.Row="0" Background="{StaticResource Surface}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1" Padding="14,0">
-            <Grid>
+        <!-- ======================= TOP TOOLBAR + SPECIFIC TARGET TAB PICKER ======================= -->
+        <Border Grid.Row="0" Background="{StaticResource Surface}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1" Padding="14,8">
+            <StackPanel>
+                <Grid Margin="0,0,0,6">
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                     <TextBlock x:Name="HeaderTitle" Text="MH Deep Inspector" Foreground="{StaticResource Accent}" FontSize="14.5" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,14,0"/>
                     <Button x:Name="BtnTabNetwork" Style="{StaticResource AccentButton}" Content="Network / TLS / WS / SSE" Padding="11,5" FontSize="11.5" Click="BtnTabNetwork_Click"/>
@@ -30,7 +31,22 @@
                     <Button x:Name="BtnExportSelenium" Style="{StaticResource FlatButton}" Content="Selenium (.py)" Padding="10,5" FontSize="11.5" Margin="5,0,0,0" Visibility="Collapsed" Click="BtnExportSelenium_Click"/>
                     <Button Style="{StaticResource FlatButton}" Content="Clear" Padding="10,5" FontSize="11.5" Margin="5,0,0,0" Click="BtnClear_Click"/>
                 </StackPanel>
-            </Grid>
+                </Grid>
+                <Border x:Name="TabSelectorPanel" Visibility="Collapsed" Background="{StaticResource Bg}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="6" Padding="8,5">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="INSPECT SPECIFIC TAB:" Foreground="{StaticResource Accent}" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                        <ComboBox x:Name="CbTargetTab" Grid.Column="1" Style="{StaticResource DarkCombo}" FontSize="11.5" Padding="8,4"/>
+                        <Button Grid.Column="2" Style="{StaticResource GreenButton}" Content="Attach Network + UI Recorder" Padding="11,5" FontSize="11" Margin="8,0,6,0" Click="BtnAttachTab_Click"/>
+                        <Button Grid.Column="3" Style="{StaticResource FlatButton}" Content="Refresh Tabs" Padding="9,5" FontSize="11" Click="BtnRefreshTabs_Click"/>
+                    </Grid>
+                </Border>
+            </StackPanel>
         </Border>
 
         <!-- ======================= TAB 1: NETWORK / TLS / WS / SSE / GRAPHQL ======================= -->

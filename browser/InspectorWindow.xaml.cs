@@ -86,6 +86,9 @@ public partial class InspectorWindow : Window
     private readonly ObservableCollection<RecordedUiAction> _uiActions;
     private readonly ObservableCollection<InternalSecurityEvent> _internals;
     private readonly Func<string, Task<string>> _fetchBodyAsync;
+    private Func<Task<List<(string Id, string Title, string Url, string WsUrl)>>>? _listTabsAsync;
+    private Func<string, string, Task>? _attachTabAsync;
+    private List<(string Id, string Title, string Url, string WsUrl)> _tabs = new();
     private string _activeFilter = "ALL";
     private string _activeTab = "NET";
 
@@ -531,5 +534,44 @@ public partial class InspectorWindow : Window
         else if (_activeTab == "INT") { _internals.Clear(); }
         else { _allNet.Clear(); TxtNetDetail.Text = ""; }
         UpdateCounts();
+    }
+
+    public void ConfigureTabPicker(
+        Func<Task<List<(string Id, string Title, string Url, string WsUrl)>>> listTabsAsync,
+        Func<string, string, Task> attachTabAsync)
+    {
+        _listTabsAsync = listTabsAsync;
+        _attachTabAsync = attachTabAsync;
+        TabSelectorPanel.Visibility = Visibility.Visible;
+        _ = RefreshTabsAsync();
+    }
+
+    private async Task RefreshTabsAsync()
+    {
+        if (_listTabsAsync is null) return;
+        _tabs = await _listTabsAsync();
+        CbTargetTab.ItemsSource = _tabs.Select(t =>
+            string.IsNullOrWhiteSpace(t.Title) ? t.Url : $"{t.Title} — {t.Url}").ToList();
+        if (_tabs.Count > 0)
+        {
+            CbTargetTab.SelectedIndex = 0;
+            InspectorStatus.Text = $"Select a specific tab above and click 'Attach Network + UI Recorder' ({_tabs.Count} tab(s) open).";
+        }
+        else
+        {
+            InspectorStatus.Text = "No open tabs found yet — click Refresh Tabs.";
+        }
+    }
+
+    private async void BtnRefreshTabs_Click(object sender, RoutedEventArgs e) =>
+        await RefreshTabsAsync();
+
+    private async void BtnAttachTab_Click(object sender, RoutedEventArgs e)
+    {
+        if (_attachTabAsync is null || CbTargetTab.SelectedIndex < 0 || CbTargetTab.SelectedIndex >= _tabs.Count) return;
+        var chosen = _tabs[CbTargetTab.SelectedIndex];
+        InspectorStatus.Text = $"Attaching Network + UI Recorder strictly to: {chosen.Title}...";
+        await _attachTabAsync(chosen.WsUrl, chosen.Title);
+        InspectorStatus.Text = $"LIVE — Attached ONLY to tab: {chosen.Title} ({chosen.Url})";
     }
 }
