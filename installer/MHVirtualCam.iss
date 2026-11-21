@@ -1,5 +1,5 @@
 #define MyAppName "MH Advanced Tool"
-#define MyAppVersion "4.4.5"
+#define MyAppVersion "4.4.7"
 #define MyAppExeName "MHVirtualCam.exe"
 #define MyHubExeName "browser\MHBrowser.exe"
 

@@ -109,6 +109,8 @@ public sealed class BrowserProfile : INotifyPropertyChanged
     public double CustomGeoLat { get; set; } = 0;
     public double CustomGeoLon { get; set; } = 0;
     public double CustomGeoAccuracy { get; set; } = 35;
+    public string PreferredCameraLabel { get; set; } = "";
+    public string PreferredMicLabel { get; set; } = "";
     public bool WebRtcProtect { get; set; } = true;
     public bool FingerprintNoise { get; set; } = true;
     public bool WebGlSpoof { get; set; } = true;
@@ -187,6 +189,8 @@ public sealed class BrowserProfile : INotifyPropertyChanged
         CustomGeoLat = CustomGeoLat,
         CustomGeoLon = CustomGeoLon,
         CustomGeoAccuracy = CustomGeoAccuracy,
+        PreferredCameraLabel = PreferredCameraLabel,
+        PreferredMicLabel = PreferredMicLabel,
         WebRtcProtect = WebRtcProtect,
         FingerprintNoise = FingerprintNoise,
         WebGlSpoof = WebGlSpoof,

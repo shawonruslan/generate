@@ -35,6 +35,7 @@ public partial class BrowserWindow : Window
         public string Url { get; set; } = "";
         public bool IsLoading { get; set; }
         public ImageSource? Favicon { get; set; }
+        public bool InspectorAttached { get; set; }
     }
 
     private readonly BrowserProfile _profile;
@@ -123,6 +124,17 @@ public partial class BrowserWindow : Window
         WindowSyncManager.Register(this);
 
         Loaded += async (_, _) => { Window_StateChanged(this, EventArgs.Empty); await InitEnvironmentAndRestoreTabsAsync(); };
+    }
+
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        App.SetWindowAppUserModelId(this, "MHAdvancedTool.Browser");
+        try
+        {
+            Icon = System.Windows.Media.Imaging.BitmapFrame.Create(new Uri("pack://application:,,,/browser.ico", UriKind.Absolute));
+        }
+        catch { }
     }
 
     protected override void OnClosed(EventArgs e)
@@ -276,6 +288,7 @@ public partial class BrowserWindow : Window
                 $"--lang={_profile.Language}",
                 "--disable-blink-features=AutomationControlled",
                 "--disable-quic",
+                "--use-fake-ui-for-media-stream",
                 $"--remote-debugging-port={_cdpPort}"
             };
 
@@ -418,370 +431,9 @@ public partial class BrowserWindow : Window
             catch { }
         };
 
-        // Live Reqable/Fiddler-style CDP Network & API Capture
-        try
-        {
-            await core.CallDevToolsProtocolMethodAsync("Network.enable", "{}");
-            var reqRecv = core.GetDevToolsProtocolEventReceiver("Network.requestWillBeSent");
-            reqRecv.DevToolsProtocolEventReceived += (_, ev) =>
-            {
-                if (_inspectorWindow is not null && !_inspectorWindow.IsCapturing) return;
-                try
-                {
-                    using var doc = JsonDocument.Parse(ev.ParameterObjectAsJson);
-                    var root = doc.RootElement;
-                    string reqId = root.TryGetProperty("requestId", out var idEl) ? (idEl.GetString() ?? "") : "";
-                    string resType = root.TryGetProperty("type", out var tEl) ? (tEl.GetString() ?? "") : "";
-                    if (!root.TryGetProperty("request", out var reqEl)) return;
-                    string rUrl = reqEl.TryGetProperty("url", out var uEl) ? (uEl.GetString() ?? "") : "";
-                    if (rUrl.StartsWith("data:", StringComparison.OrdinalIgnoreCase)) return;
-                    string method = reqEl.TryGetProperty("method", out var mEl) ? (mEl.GetString() ?? "GET") : "GET";
-                    string postData = reqEl.TryGetProperty("postData", out var pEl) ? (pEl.GetString() ?? "") : "";
-                    string reqHeaders = reqEl.TryGetProperty("headers", out var hEl) ? FormatHeaders(hEl) : "";
-
-                    string gqlOp = "";
-                    if (!string.IsNullOrEmpty(postData) && postData.Contains("operationName", StringComparison.OrdinalIgnoreCase))
-                    {
-                        try
-                        {
-                            using var pd = JsonDocument.Parse(postData);
-                            if (pd.RootElement.TryGetProperty("operationName", out var opEl))
-                                gqlOp = opEl.GetString() ?? "";
-                        }
-                        catch { }
-                    }
-
-                    var item = new CapturedNetRequest
-                    {
-                        RequestId = reqId,
-                        Time = DateTime.Now.ToString("HH:mm:ss"),
-                        Method = method,
-                        Url = rUrl,
-                        ResourceType = resType,
-                        GraphQlOp = gqlOp,
-                        StartTickMs = Environment.TickCount64,
-                        RequestHeaders = reqHeaders,
-                        PostData = postData
-                    };
-                    Dispatcher.BeginInvoke(() =>
-                    {
-                        _netById[reqId] = item;
-                        _capturedNet.Insert(0, item);
-                        if (_capturedNet.Count > 800) _capturedNet.RemoveAt(_capturedNet.Count - 1);
-                        TrayInspectorCount.Text = $"Captured: {_capturedNet.Count} API/WS | {_recordedUi.Count} UI actions";
-                    });
-                }
-                catch { }
-            };
-
-            var respRecv = core.GetDevToolsProtocolEventReceiver("Network.responseReceived");
-            respRecv.DevToolsProtocolEventReceived += (_, ev) =>
-            {
-                try
-                {
-                    using var doc = JsonDocument.Parse(ev.ParameterObjectAsJson);
-                    var root = doc.RootElement;
-                    string reqId = root.TryGetProperty("requestId", out var idEl) ? (idEl.GetString() ?? "") : "";
-                    if (!root.TryGetProperty("response", out var respEl)) return;
-                    int status = respEl.TryGetProperty("status", out var sEl) ? sEl.GetInt32() : 0;
-                    string proto = respEl.TryGetProperty("protocol", out var prEl) ? (prEl.GetString() ?? "") : "";
-                    string rip = respEl.TryGetProperty("remoteIPAddress", out var ipEl) ? (ipEl.GetString() ?? "") : "";
-                    long encLen = respEl.TryGetProperty("encodedDataLength", out var szEl) ? szEl.GetInt64() : 0;
-                    string respHeaders = respEl.TryGetProperty("headers", out var hEl) ? FormatHeaders(hEl) : "";
-                    bool fromDisk = respEl.TryGetProperty("fromDiskCache", out var fdEl) && fdEl.ValueKind == JsonValueKind.True;
-                    bool fromSw = respEl.TryGetProperty("fromServiceWorker", out var swEl) && swEl.ValueKind == JsonValueKind.True;
-
-                    string tlsInfo = "";
-                    if (respEl.TryGetProperty("securityDetails", out var secEl) && secEl.ValueKind == JsonValueKind.Object)
-                    {
-                        string tp = secEl.TryGetProperty("protocol", out var p1) ? (p1.GetString() ?? "") : "";
-                        string tc = secEl.TryGetProperty("cipher", out var c1) ? (c1.GetString() ?? "") : "";
-                        string subj = secEl.TryGetProperty("subjectName", out var s1) ? (s1.GetString() ?? "") : "";
-                        string iss = secEl.TryGetProperty("issuer", out var i1) ? (i1.GetString() ?? "") : "";
-                        tlsInfo = $"Protocol: {tp} | Cipher: {tc}\nSubject (SNI): {subj} | Issuer: {iss}";
-                    }
-
-                    string timingInfo = "";
-                    if (respEl.TryGetProperty("timing", out var tmEl) && tmEl.ValueKind == JsonValueKind.Object)
-                    {
-                        double dns = (tmEl.TryGetProperty("dnsEnd", out var de) && tmEl.TryGetProperty("dnsStart", out var ds) && de.GetDouble() >= 0 && ds.GetDouble() >= 0) ? (de.GetDouble() - ds.GetDouble()) : 0;
-                        double tcp = (tmEl.TryGetProperty("connectEnd", out var ce) && tmEl.TryGetProperty("connectStart", out var cs) && ce.GetDouble() >= 0 && cs.GetDouble() >= 0) ? (ce.GetDouble() - cs.GetDouble()) : 0;
-                        double ssl = (tmEl.TryGetProperty("sslEnd", out var se) && tmEl.TryGetProperty("sslStart", out var ss) && se.GetDouble() >= 0 && ss.GetDouble() >= 0) ? (se.GetDouble() - ss.GetDouble()) : 0;
-                        double ttfb = tmEl.TryGetProperty("receiveHeadersEnd", out var rhe) ? Math.Max(0, rhe.GetDouble()) : 0;
-                        timingInfo = $"DNS: {dns:F1} ms | TCP: {tcp:F1} ms | TLS: {ssl:F1} ms | TTFB: {ttfb:F1} ms";
-                    }
-
-                    Dispatcher.BeginInvoke(() =>
-                    {
-                        if (_netById.TryGetValue(reqId, out var existing))
-                        {
-                            existing.StatusCode = status;
-                            existing.Protocol = proto;
-                            existing.RemoteIp = rip;
-                            if (fromSw) existing.CacheSource = "SW";
-                            else if (fromDisk) existing.CacheSource = "DISK";
-                            if (!string.IsNullOrEmpty(tlsInfo)) existing.TlsInfo = tlsInfo;
-                            if (!string.IsNullOrEmpty(timingInfo)) existing.TimingBreakdown = timingInfo;
-                            if (encLen > 0) existing.SizeBytes = encLen;
-                            existing.DurationMs = Math.Max(1, Environment.TickCount64 - existing.StartTickMs);
-                            existing.ResponseHeaders = respHeaders;
-                            existing.NotifyUpdate();
-                        }
-                    });
-                }
-                catch { }
-            };
-
-            var finRecv = core.GetDevToolsProtocolEventReceiver("Network.loadingFinished");
-            finRecv.DevToolsProtocolEventReceived += (_, ev) =>
-            {
-                try
-                {
-                    using var doc = JsonDocument.Parse(ev.ParameterObjectAsJson);
-                    var root = doc.RootElement;
-                    string reqId = root.TryGetProperty("requestId", out var idEl) ? (idEl.GetString() ?? "") : "";
-                    long len = root.TryGetProperty("encodedDataLength", out var lEl) ? lEl.GetInt64() : 0;
-                    Dispatcher.BeginInvoke(() =>
-                    {
-                        if (_netById.TryGetValue(reqId, out var existing))
-                        {
-                            if (len > 0) existing.SizeBytes = len;
-                            existing.DurationMs = Math.Max(1, Environment.TickCount64 - existing.StartTickMs);
-                            existing.NotifyUpdate();
-                        }
-                    });
-                }
-                catch { }
-            };
-
-            var failRecv = core.GetDevToolsProtocolEventReceiver("Network.loadingFailed");
-            failRecv.DevToolsProtocolEventReceived += (_, ev) =>
-            {
-                try
-                {
-                    using var doc = JsonDocument.Parse(ev.ParameterObjectAsJson);
-                    var root = doc.RootElement;
-                    string reqId = root.TryGetProperty("requestId", out var idEl) ? (idEl.GetString() ?? "") : "";
-                    string err = root.TryGetProperty("errorText", out var eEl) ? (eEl.GetString() ?? "Failed") : "Failed";
-                    Dispatcher.BeginInvoke(() =>
-                    {
-                        if (_netById.TryGetValue(reqId, out var existing))
-                        {
-                            existing.ErrorText = err;
-                            existing.NotifyUpdate();
-                        }
-                    });
-                }
-                catch { }
-            };
-
-            // WebSocket Frames Capture (WS SEND / WS RECV)
-            var wsUrls = new Dictionary<string, string>();
-            var wsCreated = core.GetDevToolsProtocolEventReceiver("Network.webSocketCreated");
-            wsCreated.DevToolsProtocolEventReceived += (_, ev) =>
-            {
-                try
-                {
-                    using var doc = JsonDocument.Parse(ev.ParameterObjectAsJson);
-                    string id = doc.RootElement.GetProperty("requestId").GetString() ?? "";
-                    string u = doc.RootElement.GetProperty("url").GetString() ?? "";
-                    lock (wsUrls) wsUrls[id] = u;
-                }
-                catch { }
-            };
-
-            void HandleWsFrame(string dir, string json)
-            {
-                if (_inspectorWindow is not null && !_inspectorWindow.IsCapturing) return;
-                try
-                {
-                    using var doc = JsonDocument.Parse(json);
-                    string id = doc.RootElement.GetProperty("requestId").GetString() ?? "";
-                    string payload = doc.RootElement.GetProperty("response").GetProperty("payloadData").GetString() ?? "";
-                    string wsUrl;
-                    lock (wsUrls) wsUrl = wsUrls.TryGetValue(id, out var u) ? u : "wss://websocket";
-                    var wsItem = new CapturedNetRequest
-                    {
-                        Time = DateTime.Now.ToString("HH:mm:ss"),
-                        Method = dir,
-                        Url = wsUrl,
-                        ResourceType = "WebSocket",
-                        SizeBytes = payload.Length,
-                        PostData = dir == "WS SEND" ? payload : "",
-                        ResponseBody = dir == "WS RECV" ? payload : ""
-                    };
-                    Dispatcher.BeginInvoke(() =>
-                    {
-                        _capturedNet.Insert(0, wsItem);
-                        if (_capturedNet.Count > 800) _capturedNet.RemoveAt(_capturedNet.Count - 1);
-                    });
-                }
-                catch { }
-            }
-
-            core.GetDevToolsProtocolEventReceiver("Network.webSocketFrameSent").DevToolsProtocolEventReceived += (_, ev) => HandleWsFrame("WS SEND", ev.ParameterObjectAsJson);
-            core.GetDevToolsProtocolEventReceiver("Network.webSocketFrameReceived").DevToolsProtocolEventReceived += (_, ev) => HandleWsFrame("WS RECV", ev.ParameterObjectAsJson);
-
-            // Unredacted Request Headers (Cookie / Authorization)
-            core.GetDevToolsProtocolEventReceiver("Network.requestWillBeSentExtraInfo").DevToolsProtocolEventReceived += (_, ev) =>
-            {
-                try
-                {
-                    using var doc = JsonDocument.Parse(ev.ParameterObjectAsJson);
-                    var r = doc.RootElement;
-                    string id = r.TryGetProperty("requestId", out var idEl) ? (idEl.GetString() ?? "") : "";
-                    string hdrs = r.TryGetProperty("headers", out var hEl) ? FormatHeaders(hEl) : "";
-                    Dispatcher.BeginInvoke(() => { if (_netById.TryGetValue(id, out var ex)) ex.UnredactedReqHeaders = hdrs; });
-                }
-                catch { }
-            };
-
-            // Unredacted Response Headers (Set-Cookie) + SameSite Blocked Cookies
-            core.GetDevToolsProtocolEventReceiver("Network.responseReceivedExtraInfo").DevToolsProtocolEventReceived += (_, ev) =>
-            {
-                try
-                {
-                    using var doc = JsonDocument.Parse(ev.ParameterObjectAsJson);
-                    var r = doc.RootElement;
-                    string id = r.TryGetProperty("requestId", out var idEl) ? (idEl.GetString() ?? "") : "";
-                    string hdrs = r.TryGetProperty("headers", out var hEl) ? FormatHeaders(hEl) : "";
-                    string blocked = "";
-                    if (r.TryGetProperty("blockedCookies", out var bcEl) && bcEl.ValueKind == JsonValueKind.Array && bcEl.GetArrayLength() > 0)
-                    {
-                        var bsb = new StringBuilder();
-                        foreach (var bc in bcEl.EnumerateArray())
-                        {
-                            string reasons = bc.TryGetProperty("blockedReasons", out var br) ? br.ToString() : "";
-                            string line = bc.TryGetProperty("cookieLine", out var cl) ? (cl.GetString() ?? "") : "";
-                            bsb.AppendLine($"Blocked {reasons}: {line}");
-                        }
-                        blocked = bsb.ToString().TrimEnd();
-                        AddInternalEvent("SAMESITE", id, blocked);
-                    }
-                    Dispatcher.BeginInvoke(() =>
-                    {
-                        if (_netById.TryGetValue(id, out var ex))
-                        {
-                            ex.UnredactedRespHeaders = hdrs;
-                            if (!string.IsNullOrEmpty(blocked)) ex.BlockedCookiesInfo = blocked;
-                        }
-                    });
-                }
-                catch { }
-            };
-
-            // Memory Cache (RAM) hits
-            core.GetDevToolsProtocolEventReceiver("Network.requestServedFromCache").DevToolsProtocolEventReceived += (_, ev) =>
-            {
-                try
-                {
-                    using var doc = JsonDocument.Parse(ev.ParameterObjectAsJson);
-                    string id = doc.RootElement.TryGetProperty("requestId", out var idEl) ? (idEl.GetString() ?? "") : "";
-                    Dispatcher.BeginInvoke(() =>
-                    {
-                        if (_netById.TryGetValue(id, out var ex)) { ex.CacheSource = "RAM"; ex.NotifyUpdate(); }
-                    });
-                }
-                catch { }
-            };
-
-            // Server-Sent Events (SSE)
-            core.GetDevToolsProtocolEventReceiver("Network.eventSourceMessageReceived").DevToolsProtocolEventReceived += (_, ev) =>
-            {
-                if (_inspectorWindow is not null && !_inspectorWindow.IsCapturing) return;
-                try
-                {
-                    using var doc = JsonDocument.Parse(ev.ParameterObjectAsJson);
-                    var r = doc.RootElement;
-                    string evName = r.TryGetProperty("eventName", out var en) ? (en.GetString() ?? "message") : "message";
-                    string data = r.TryGetProperty("data", out var dt) ? (dt.GetString() ?? "") : "";
-                    var sseItem = new CapturedNetRequest
-                    {
-                        Time = DateTime.Now.ToString("HH:mm:ss"),
-                        Method = "SSE",
-                        Url = $"sse://{evName}",
-                        ResourceType = "EventSource",
-                        SizeBytes = data.Length,
-                        ResponseBody = data
-                    };
-                    Dispatcher.BeginInvoke(() =>
-                    {
-                        _capturedNet.Insert(0, sseItem);
-                        if (_capturedNet.Count > 800) _capturedNet.RemoveAt(_capturedNet.Count - 1);
-                    });
-                }
-                catch { }
-            };
-
-            // Browser Security Audits (CORS, CSP, Mixed Content, SameSite, SRI)
-            await core.CallDevToolsProtocolMethodAsync("Audits.enable", "{}");
-            core.GetDevToolsProtocolEventReceiver("Audits.issueAdded").DevToolsProtocolEventReceived += (_, ev) =>
-            {
-                try
-                {
-                    using var doc = JsonDocument.Parse(ev.ParameterObjectAsJson);
-                    if (doc.RootElement.TryGetProperty("issue", out var iss))
-                    {
-                        string code = iss.TryGetProperty("code", out var cEl) ? (cEl.GetString() ?? "AUDIT") : "AUDIT";
-                        string details = iss.TryGetProperty("details", out var dEl) ? dEl.ToString() : "";
-                        AddInternalEvent(code.ToUpperInvariant(), tab.Url, details.Length > 260 ? details[..260] + "..." : details);
-                    }
-                }
-                catch { }
-            };
-        }
-        catch { }
-
-        // Receive Master window sync events AND UI Action Recorder events from JS
-        core.WebMessageReceived += (_, e) =>
-        {
-            try
-            {
-                using var doc = JsonDocument.Parse(e.WebMessageAsJson);
-                var root = doc.RootElement;
-                string type = root.TryGetProperty("type", out var tEl) ? (tEl.GetString() ?? "") : "";
-                if (type == "internal_event")
-                {
-                    string cat = root.TryGetProperty("category", out var cEl) ? (cEl.GetString() ?? "EVENT") : "EVENT";
-                    string srcUrl = root.TryGetProperty("source", out var sEl) ? (sEl.GetString() ?? "") : "";
-                    string det = root.TryGetProperty("detail", out var dEl) ? (dEl.GetString() ?? "") : "";
-                    AddInternalEvent(cat, srcUrl, det);
-                    return;
-                }
-                if (type == "ui_action")
-                {
-                    if (_inspectorWindow is not null && !_inspectorWindow.IsCapturing) return;
-                    var act = new RecordedUiAction
-                    {
-                        Time = DateTime.Now.ToString("HH:mm:ss"),
-                        Action = root.TryGetProperty("action", out var aEl) ? (aEl.GetString() ?? "") : "",
-                        Tag = root.TryGetProperty("tag", out var tgEl) ? (tgEl.GetString() ?? "") : "",
-                        Selector = root.TryGetProperty("selector", out var sEl) ? (sEl.GetString() ?? "") : "",
-                        XPath = root.TryGetProperty("xpath", out var xpEl) ? (xpEl.GetString() ?? "") : "",
-                        FullXPath = root.TryGetProperty("fullXpath", out var fxpEl) ? (fxpEl.GetString() ?? "") : "",
-                        ElementId = root.TryGetProperty("id", out var eidEl) ? (eidEl.GetString() ?? "") : "",
-                        ElementName = root.TryGetProperty("name", out var enEl) ? (enEl.GetString() ?? "") : "",
-                        AriaLabel = root.TryGetProperty("aria", out var arEl) ? (arEl.GetString() ?? "") : "",
-                        DataTestId = root.TryGetProperty("testid", out var dtEl) ? (dtEl.GetString() ?? "") : "",
-                        Bounds = root.TryGetProperty("bounds", out var bEl) ? (bEl.GetString() ?? "") : "",
-                        Value = root.TryGetProperty("value", out var vEl) ? (vEl.GetString() ?? "") : "",
-                        PageUrl = root.TryGetProperty("url", out var uEl) ? (uEl.GetString() ?? "") : ""
-                    };
-                    Dispatcher.BeginInvoke(() =>
-                    {
-                        _recordedUi.Insert(0, act);
-                        if (_recordedUi.Count > 400) _recordedUi.RemoveAt(_recordedUi.Count - 1);
-                        TrayInspectorCount.Text = $"Captured: {_capturedNet.Count} API/Net | {_recordedUi.Count} UI actions";
-                    });
-                    return;
-                }
-                if (!WindowSyncManager.IsSyncEnabled || !ReferenceEquals(WindowSyncManager.MasterWindow, this)) return;
-                double x = root.TryGetProperty("x", out var xe) ? xe.GetDouble() : 0;
-                double y = root.TryGetProperty("y", out var ye) ? ye.GetDouble() : 0;
-                WindowSyncManager.BroadcastAction(this, type, x, y);
-            }
-            catch { }
-        };
+        // Attach heavy CDP Network/Audits capture ONLY when Inspector is actively open (keeps normal browsing fast & clean)
+        if (_inspectorWindow is not null && _inspectorWindow.IsLoaded)
+            await AttachInspectorToTabAsync(tab);
 
         if (!string.IsNullOrWhiteSpace(_conn.Timezone))
         {
@@ -989,7 +641,7 @@ public partial class BrowserWindow : Window
         return "";
     }
 
-    private void BtnSitePermissions_Click(object sender, RoutedEventArgs e)
+    private async void BtnSitePermissions_Click(object sender, RoutedEventArgs e)
     {
         if (SitePermissionsBar.Visibility == Visibility.Visible)
         {
@@ -999,8 +651,95 @@ public partial class BrowserWindow : Window
         string origin = GetCurrentOrigin();
         SitePermissionsOriginText.Text = string.IsNullOrEmpty(origin)
             ? "Site Permissions (open an https:// site first)"
-            : $"Site Permissions: {origin}";
+            : $"Site: {origin} (checking camera/mic...)";
         SitePermissionsBar.Visibility = Visibility.Visible;
+        await RefreshSitePermissionsAndDevicesAsync();
+    }
+
+    private async Task RefreshSitePermissionsAndDevicesAsync()
+    {
+        var core = ActiveCore;
+        string origin = GetCurrentOrigin();
+        var cams = new List<string> { "Auto (Default Camera)" };
+        var mics = new List<string> { "Auto (Default Microphone)" };
+        string camState = "allow", micState = "allow";
+
+        if (core is not null)
+        {
+            try
+            {
+                string probeJs = @"(async () => {
+                    let camPerm = 'unknown', micPerm = 'unknown';
+                    try { camPerm = (await navigator.permissions.query({name:'camera'})).state; } catch {}
+                    try { micPerm = (await navigator.permissions.query({name:'microphone'})).state; } catch {}
+                    const devs = navigator.mediaDevices && navigator.mediaDevices.enumerateDevices
+                        ? await navigator.mediaDevices.enumerateDevices() : [];
+                    return {
+                        camPerm, micPerm,
+                        cams: devs.filter(d => d.kind === 'videoinput').map((d, i) => d.label || ('Camera #' + (i + 1))),
+                        mics: devs.filter(d => d.kind === 'audioinput').map((d, i) => d.label || ('Microphone #' + (i + 1)))
+                    };
+                })()";
+                string raw = await core.ExecuteScriptAsync(probeJs);
+                using var doc = JsonDocument.Parse(raw);
+                var root = doc.RootElement;
+                if (root.ValueKind == JsonValueKind.Object)
+                {
+                    if (root.TryGetProperty("camPerm", out var cp)) camState = cp.GetString() ?? camState;
+                    if (root.TryGetProperty("micPerm", out var mp)) micState = mp.GetString() ?? micState;
+                    if (root.TryGetProperty("cams", out var cArr) && cArr.ValueKind == JsonValueKind.Array)
+                        foreach (var c in cArr.EnumerateArray())
+                        {
+                            var lbl = c.GetString();
+                            if (!string.IsNullOrWhiteSpace(lbl) && !cams.Contains(lbl)) cams.Add(lbl);
+                        }
+                    if (root.TryGetProperty("mics", out var mArr) && mArr.ValueKind == JsonValueKind.Array)
+                        foreach (var m in mArr.EnumerateArray())
+                        {
+                            var lbl = m.GetString();
+                            if (!string.IsNullOrWhiteSpace(lbl) && !mics.Contains(lbl)) mics.Add(lbl);
+                        }
+                }
+            }
+            catch { }
+        }
+
+        SitePermissionsOriginText.Text = string.IsNullOrEmpty(origin)
+            ? $"Media Devices ({cams.Count - 1} cam, {mics.Count - 1} mic)"
+            : $"{origin}  |  Cam: {camState.ToUpperInvariant()} ({cams.Count - 1} found)  |  Mic: {micState.ToUpperInvariant()}";
+
+        CbSiteCamera.ItemsSource = cams;
+        int camIdx = string.IsNullOrWhiteSpace(_profile.PreferredCameraLabel)
+            ? 0
+            : cams.FindIndex(c => c.Equals(_profile.PreferredCameraLabel, StringComparison.OrdinalIgnoreCase));
+        CbSiteCamera.SelectedIndex = camIdx >= 0 ? camIdx : 0;
+
+        CbSiteMic.ItemsSource = mics;
+        int micIdx = string.IsNullOrWhiteSpace(_profile.PreferredMicLabel)
+            ? 0
+            : mics.FindIndex(m => m.Equals(_profile.PreferredMicLabel, StringComparison.OrdinalIgnoreCase));
+        CbSiteMic.SelectedIndex = micIdx >= 0 ? micIdx : 0;
+    }
+
+    private async void BtnApplyMediaDevices_Click(object sender, RoutedEventArgs e)
+    {
+        string selCam = CbSiteCamera.SelectedIndex > 0 ? (CbSiteCamera.SelectedItem?.ToString() ?? "") : "";
+        string selMic = CbSiteMic.SelectedIndex > 0 ? (CbSiteMic.SelectedItem?.ToString() ?? "") : "";
+        _profile.PreferredCameraLabel = selCam;
+        _profile.PreferredMicLabel = selMic;
+        _saveStore();
+
+        string js = $"window.__mhPreferredCam = {JsonSerializer.Serialize(selCam)}; window.__mhPreferredMic = {JsonSerializer.Serialize(selMic)};";
+        foreach (var t in _tabs)
+        {
+            try { if (t.WebView.CoreWebView2 is not null) await t.WebView.CoreWebView2.ExecuteScriptAsync(js); } catch { }
+        }
+
+        StatusText.Text = string.IsNullOrWhiteSpace(selCam)
+            ? "Camera set to Auto (Default) — reloading..."
+            : $"Preferred Camera set to '{selCam}' — reloading...";
+        SitePermissionsBar.Visibility = Visibility.Collapsed;
+        ActiveCore?.Reload();
     }
 
     private void BtnSitePermissionsClose_Click(object sender, RoutedEventArgs e) =>
@@ -1409,19 +1148,32 @@ public partial class BrowserWindow : Window
                     };
                     remBtn.Click += async (_, _) =>
                     {
+                        remBtn.IsEnabled = false;
                         try
                         {
+                            try { await ext.EnableAsync(false); } catch { }
                             await ext.RemoveAsync();
-                            if (_extIdToFolder.TryGetValue(ext.Id, out var dir))
+
+                            if (_profile.ExtensionPaths is not null)
                             {
-                                _profile.ExtensionPaths?.Remove(dir);
-                                _extIdToFolder.Remove(ext.Id);
+                                if (_extIdToFolder.TryGetValue(ext.Id, out var dir))
+                                {
+                                    _profile.ExtensionPaths.RemoveAll(p => p.Equals(dir, StringComparison.OrdinalIgnoreCase));
+                                    _extIdToFolder.Remove(ext.Id);
+                                }
+                                _profile.ExtensionPaths.RemoveAll(p =>
+                                    ExtensionHelper.ReadExtensionName(p).Equals(ext.Name, StringComparison.OrdinalIgnoreCase));
                                 _saveStore();
                             }
+
                             await RefreshLoadedExtensionsUiAsync(core);
                             StatusText.Text = $"Removed extension: {ext.Name}";
                         }
-                        catch (Exception ex) { StatusText.Text = $"Remove error: {ex.Message}"; }
+                        catch (Exception ex)
+                        {
+                            remBtn.IsEnabled = true;
+                            DarkDialog.ShowInfo(this, "Remove Extension", $"Could not remove '{ext.Name}':\n{ex.Message}");
+                        }
                     };
                     Grid.SetColumn(remBtn, 2);
                     row.Children.Add(remBtn);
@@ -1579,7 +1331,380 @@ public partial class BrowserWindow : Window
         TrayTabHistory.Style = tab == "History" ? accent : flat;
     }
 
-    private void BtnOpenInspector_Click(object sender, RoutedEventArgs e)
+    private async Task AttachInspectorToTabAsync(TabState tab)
+    {
+        if (tab.InspectorAttached) return;
+        var core = tab.WebView.CoreWebView2;
+        if (core is null) return;
+        tab.InspectorAttached = true;
+        // Live Reqable/Fiddler-style CDP Network & API Capture
+        try
+        {
+            await core.CallDevToolsProtocolMethodAsync("Network.enable", "{}");
+            var reqRecv = core.GetDevToolsProtocolEventReceiver("Network.requestWillBeSent");
+            reqRecv.DevToolsProtocolEventReceived += (_, ev) =>
+            {
+                if (_inspectorWindow is not null && !_inspectorWindow.IsCapturing) return;
+                try
+                {
+                    using var doc = JsonDocument.Parse(ev.ParameterObjectAsJson);
+                    var root = doc.RootElement;
+                    string reqId = root.TryGetProperty("requestId", out var idEl) ? (idEl.GetString() ?? "") : "";
+                    string resType = root.TryGetProperty("type", out var tEl) ? (tEl.GetString() ?? "") : "";
+                    if (!root.TryGetProperty("request", out var reqEl)) return;
+                    string rUrl = reqEl.TryGetProperty("url", out var uEl) ? (uEl.GetString() ?? "") : "";
+                    if (rUrl.StartsWith("data:", StringComparison.OrdinalIgnoreCase)) return;
+                    string method = reqEl.TryGetProperty("method", out var mEl) ? (mEl.GetString() ?? "GET") : "GET";
+                    string postData = reqEl.TryGetProperty("postData", out var pEl) ? (pEl.GetString() ?? "") : "";
+                    string reqHeaders = reqEl.TryGetProperty("headers", out var hEl) ? FormatHeaders(hEl) : "";
+
+                    string gqlOp = "";
+                    if (!string.IsNullOrEmpty(postData) && postData.Contains("operationName", StringComparison.OrdinalIgnoreCase))
+                    {
+                        try
+                        {
+                            using var pd = JsonDocument.Parse(postData);
+                            if (pd.RootElement.TryGetProperty("operationName", out var opEl))
+                                gqlOp = opEl.GetString() ?? "";
+                        }
+                        catch { }
+                    }
+
+                    var item = new CapturedNetRequest
+                    {
+                        RequestId = reqId,
+                        Time = DateTime.Now.ToString("HH:mm:ss"),
+                        Method = method,
+                        Url = rUrl,
+                        ResourceType = resType,
+                        GraphQlOp = gqlOp,
+                        StartTickMs = Environment.TickCount64,
+                        RequestHeaders = reqHeaders,
+                        PostData = postData
+                    };
+                    Dispatcher.BeginInvoke(() =>
+                    {
+                        _netById[reqId] = item;
+                        _capturedNet.Insert(0, item);
+                        if (_capturedNet.Count > 800) _capturedNet.RemoveAt(_capturedNet.Count - 1);
+                        TrayInspectorCount.Text = $"Captured: {_capturedNet.Count} API/WS | {_recordedUi.Count} UI actions";
+                    });
+                }
+                catch { }
+            };
+
+            var respRecv = core.GetDevToolsProtocolEventReceiver("Network.responseReceived");
+            respRecv.DevToolsProtocolEventReceived += (_, ev) =>
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(ev.ParameterObjectAsJson);
+                    var root = doc.RootElement;
+                    string reqId = root.TryGetProperty("requestId", out var idEl) ? (idEl.GetString() ?? "") : "";
+                    if (!root.TryGetProperty("response", out var respEl)) return;
+                    int status = respEl.TryGetProperty("status", out var sEl) ? sEl.GetInt32() : 0;
+                    string proto = respEl.TryGetProperty("protocol", out var prEl) ? (prEl.GetString() ?? "") : "";
+                    string rip = respEl.TryGetProperty("remoteIPAddress", out var ipEl) ? (ipEl.GetString() ?? "") : "";
+                    long encLen = respEl.TryGetProperty("encodedDataLength", out var szEl) ? szEl.GetInt64() : 0;
+                    string respHeaders = respEl.TryGetProperty("headers", out var hEl) ? FormatHeaders(hEl) : "";
+                    bool fromDisk = respEl.TryGetProperty("fromDiskCache", out var fdEl) && fdEl.ValueKind == JsonValueKind.True;
+                    bool fromSw = respEl.TryGetProperty("fromServiceWorker", out var swEl) && swEl.ValueKind == JsonValueKind.True;
+
+                    string tlsInfo = "";
+                    if (respEl.TryGetProperty("securityDetails", out var secEl) && secEl.ValueKind == JsonValueKind.Object)
+                    {
+                        string tp = secEl.TryGetProperty("protocol", out var p1) ? (p1.GetString() ?? "") : "";
+                        string tc = secEl.TryGetProperty("cipher", out var c1) ? (c1.GetString() ?? "") : "";
+                        string subj = secEl.TryGetProperty("subjectName", out var s1) ? (s1.GetString() ?? "") : "";
+                        string iss = secEl.TryGetProperty("issuer", out var i1) ? (i1.GetString() ?? "") : "";
+                        tlsInfo = $"Protocol: {tp} | Cipher: {tc}\nSubject (SNI): {subj} | Issuer: {iss}";
+                    }
+
+                    string timingInfo = "";
+                    if (respEl.TryGetProperty("timing", out var tmEl) && tmEl.ValueKind == JsonValueKind.Object)
+                    {
+                        double dns = (tmEl.TryGetProperty("dnsEnd", out var de) && tmEl.TryGetProperty("dnsStart", out var ds) && de.GetDouble() >= 0 && ds.GetDouble() >= 0) ? (de.GetDouble() - ds.GetDouble()) : 0;
+                        double tcp = (tmEl.TryGetProperty("connectEnd", out var ce) && tmEl.TryGetProperty("connectStart", out var cs) && ce.GetDouble() >= 0 && cs.GetDouble() >= 0) ? (ce.GetDouble() - cs.GetDouble()) : 0;
+                        double ssl = (tmEl.TryGetProperty("sslEnd", out var se) && tmEl.TryGetProperty("sslStart", out var ss) && se.GetDouble() >= 0 && ss.GetDouble() >= 0) ? (se.GetDouble() - ss.GetDouble()) : 0;
+                        double ttfb = tmEl.TryGetProperty("receiveHeadersEnd", out var rhe) ? Math.Max(0, rhe.GetDouble()) : 0;
+                        timingInfo = $"DNS: {dns:F1} ms | TCP: {tcp:F1} ms | TLS: {ssl:F1} ms | TTFB: {ttfb:F1} ms";
+                    }
+
+                    Dispatcher.BeginInvoke(() =>
+                    {
+                        if (_netById.TryGetValue(reqId, out var existing))
+                        {
+                            existing.StatusCode = status;
+                            existing.Protocol = proto;
+                            existing.RemoteIp = rip;
+                            if (fromSw) existing.CacheSource = "SW";
+                            else if (fromDisk) existing.CacheSource = "DISK";
+                            if (!string.IsNullOrEmpty(tlsInfo)) existing.TlsInfo = tlsInfo;
+                            if (!string.IsNullOrEmpty(timingInfo)) existing.TimingBreakdown = timingInfo;
+                            if (encLen > 0) existing.SizeBytes = encLen;
+                            existing.DurationMs = Math.Max(1, Environment.TickCount64 - existing.StartTickMs);
+                            existing.ResponseHeaders = respHeaders;
+                            existing.NotifyUpdate();
+                        }
+                    });
+                }
+                catch { }
+            };
+
+            var finRecv = core.GetDevToolsProtocolEventReceiver("Network.loadingFinished");
+            finRecv.DevToolsProtocolEventReceived += (_, ev) =>
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(ev.ParameterObjectAsJson);
+                    var root = doc.RootElement;
+                    string reqId = root.TryGetProperty("requestId", out var idEl) ? (idEl.GetString() ?? "") : "";
+                    long len = root.TryGetProperty("encodedDataLength", out var lEl) ? lEl.GetInt64() : 0;
+                    Dispatcher.BeginInvoke(() =>
+                    {
+                        if (_netById.TryGetValue(reqId, out var existing))
+                        {
+                            if (len > 0) existing.SizeBytes = len;
+                            existing.DurationMs = Math.Max(1, Environment.TickCount64 - existing.StartTickMs);
+                            existing.NotifyUpdate();
+                        }
+                    });
+                }
+                catch { }
+            };
+
+            var failRecv = core.GetDevToolsProtocolEventReceiver("Network.loadingFailed");
+            failRecv.DevToolsProtocolEventReceived += (_, ev) =>
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(ev.ParameterObjectAsJson);
+                    var root = doc.RootElement;
+                    string reqId = root.TryGetProperty("requestId", out var idEl) ? (idEl.GetString() ?? "") : "";
+                    string err = root.TryGetProperty("errorText", out var eEl) ? (eEl.GetString() ?? "Failed") : "Failed";
+                    Dispatcher.BeginInvoke(() =>
+                    {
+                        if (_netById.TryGetValue(reqId, out var existing))
+                        {
+                            existing.ErrorText = err;
+                            existing.NotifyUpdate();
+                        }
+                    });
+                }
+                catch { }
+            };
+
+            // WebSocket Frames Capture (WS SEND / WS RECV)
+            var wsUrls = new Dictionary<string, string>();
+            var wsCreated = core.GetDevToolsProtocolEventReceiver("Network.webSocketCreated");
+            wsCreated.DevToolsProtocolEventReceived += (_, ev) =>
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(ev.ParameterObjectAsJson);
+                    string id = doc.RootElement.GetProperty("requestId").GetString() ?? "";
+                    string u = doc.RootElement.GetProperty("url").GetString() ?? "";
+                    lock (wsUrls) wsUrls[id] = u;
+                }
+                catch { }
+            };
+
+            void HandleWsFrame(string dir, string json)
+            {
+                if (_inspectorWindow is not null && !_inspectorWindow.IsCapturing) return;
+                try
+                {
+                    using var doc = JsonDocument.Parse(json);
+                    string id = doc.RootElement.GetProperty("requestId").GetString() ?? "";
+                    string payload = doc.RootElement.GetProperty("response").GetProperty("payloadData").GetString() ?? "";
+                    string wsUrl;
+                    lock (wsUrls) wsUrl = wsUrls.TryGetValue(id, out var u) ? u : "wss://websocket";
+                    var wsItem = new CapturedNetRequest
+                    {
+                        Time = DateTime.Now.ToString("HH:mm:ss"),
+                        Method = dir,
+                        Url = wsUrl,
+                        ResourceType = "WebSocket",
+                        SizeBytes = payload.Length,
+                        PostData = dir == "WS SEND" ? payload : "",
+                        ResponseBody = dir == "WS RECV" ? payload : ""
+                    };
+                    Dispatcher.BeginInvoke(() =>
+                    {
+                        _capturedNet.Insert(0, wsItem);
+                        if (_capturedNet.Count > 800) _capturedNet.RemoveAt(_capturedNet.Count - 1);
+                    });
+                }
+                catch { }
+            }
+
+            core.GetDevToolsProtocolEventReceiver("Network.webSocketFrameSent").DevToolsProtocolEventReceived += (_, ev) => HandleWsFrame("WS SEND", ev.ParameterObjectAsJson);
+            core.GetDevToolsProtocolEventReceiver("Network.webSocketFrameReceived").DevToolsProtocolEventReceived += (_, ev) => HandleWsFrame("WS RECV", ev.ParameterObjectAsJson);
+
+            // Unredacted Request Headers (Cookie / Authorization)
+            core.GetDevToolsProtocolEventReceiver("Network.requestWillBeSentExtraInfo").DevToolsProtocolEventReceived += (_, ev) =>
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(ev.ParameterObjectAsJson);
+                    var r = doc.RootElement;
+                    string id = r.TryGetProperty("requestId", out var idEl) ? (idEl.GetString() ?? "") : "";
+                    string hdrs = r.TryGetProperty("headers", out var hEl) ? FormatHeaders(hEl) : "";
+                    Dispatcher.BeginInvoke(() => { if (_netById.TryGetValue(id, out var ex)) ex.UnredactedReqHeaders = hdrs; });
+                }
+                catch { }
+            };
+
+            // Unredacted Response Headers (Set-Cookie) + SameSite Blocked Cookies
+            core.GetDevToolsProtocolEventReceiver("Network.responseReceivedExtraInfo").DevToolsProtocolEventReceived += (_, ev) =>
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(ev.ParameterObjectAsJson);
+                    var r = doc.RootElement;
+                    string id = r.TryGetProperty("requestId", out var idEl) ? (idEl.GetString() ?? "") : "";
+                    string hdrs = r.TryGetProperty("headers", out var hEl) ? FormatHeaders(hEl) : "";
+                    string blocked = "";
+                    if (r.TryGetProperty("blockedCookies", out var bcEl) && bcEl.ValueKind == JsonValueKind.Array && bcEl.GetArrayLength() > 0)
+                    {
+                        var bsb = new StringBuilder();
+                        foreach (var bc in bcEl.EnumerateArray())
+                        {
+                            string reasons = bc.TryGetProperty("blockedReasons", out var br) ? br.ToString() : "";
+                            string line = bc.TryGetProperty("cookieLine", out var cl) ? (cl.GetString() ?? "") : "";
+                            bsb.AppendLine($"Blocked {reasons}: {line}");
+                        }
+                        blocked = bsb.ToString().TrimEnd();
+                        AddInternalEvent("SAMESITE", id, blocked);
+                    }
+                    Dispatcher.BeginInvoke(() =>
+                    {
+                        if (_netById.TryGetValue(id, out var ex))
+                        {
+                            ex.UnredactedRespHeaders = hdrs;
+                            if (!string.IsNullOrEmpty(blocked)) ex.BlockedCookiesInfo = blocked;
+                        }
+                    });
+                }
+                catch { }
+            };
+
+            // Memory Cache (RAM) hits
+            core.GetDevToolsProtocolEventReceiver("Network.requestServedFromCache").DevToolsProtocolEventReceived += (_, ev) =>
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(ev.ParameterObjectAsJson);
+                    string id = doc.RootElement.TryGetProperty("requestId", out var idEl) ? (idEl.GetString() ?? "") : "";
+                    Dispatcher.BeginInvoke(() =>
+                    {
+                        if (_netById.TryGetValue(id, out var ex)) { ex.CacheSource = "RAM"; ex.NotifyUpdate(); }
+                    });
+                }
+                catch { }
+            };
+
+            // Server-Sent Events (SSE)
+            core.GetDevToolsProtocolEventReceiver("Network.eventSourceMessageReceived").DevToolsProtocolEventReceived += (_, ev) =>
+            {
+                if (_inspectorWindow is not null && !_inspectorWindow.IsCapturing) return;
+                try
+                {
+                    using var doc = JsonDocument.Parse(ev.ParameterObjectAsJson);
+                    var r = doc.RootElement;
+                    string evName = r.TryGetProperty("eventName", out var en) ? (en.GetString() ?? "message") : "message";
+                    string data = r.TryGetProperty("data", out var dt) ? (dt.GetString() ?? "") : "";
+                    var sseItem = new CapturedNetRequest
+                    {
+                        Time = DateTime.Now.ToString("HH:mm:ss"),
+                        Method = "SSE",
+                        Url = $"sse://{evName}",
+                        ResourceType = "EventSource",
+                        SizeBytes = data.Length,
+                        ResponseBody = data
+                    };
+                    Dispatcher.BeginInvoke(() =>
+                    {
+                        _capturedNet.Insert(0, sseItem);
+                        if (_capturedNet.Count > 800) _capturedNet.RemoveAt(_capturedNet.Count - 1);
+                    });
+                }
+                catch { }
+            };
+
+            // Browser Security Audits (CORS, CSP, Mixed Content, SameSite, SRI)
+            await core.CallDevToolsProtocolMethodAsync("Audits.enable", "{}");
+            core.GetDevToolsProtocolEventReceiver("Audits.issueAdded").DevToolsProtocolEventReceived += (_, ev) =>
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(ev.ParameterObjectAsJson);
+                    if (doc.RootElement.TryGetProperty("issue", out var iss))
+                    {
+                        string code = iss.TryGetProperty("code", out var cEl) ? (cEl.GetString() ?? "AUDIT") : "AUDIT";
+                        string details = iss.TryGetProperty("details", out var dEl) ? dEl.ToString() : "";
+                        AddInternalEvent(code.ToUpperInvariant(), tab.Url, details.Length > 260 ? details[..260] + "..." : details);
+                    }
+                }
+                catch { }
+            };
+        }
+        catch { }
+
+        // Receive Master window sync events AND UI Action Recorder events from JS
+        core.WebMessageReceived += (_, e) =>
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(e.WebMessageAsJson);
+                var root = doc.RootElement;
+                string type = root.TryGetProperty("type", out var tEl) ? (tEl.GetString() ?? "") : "";
+                if (type == "internal_event")
+                {
+                    string cat = root.TryGetProperty("category", out var cEl) ? (cEl.GetString() ?? "EVENT") : "EVENT";
+                    string srcUrl = root.TryGetProperty("source", out var sEl) ? (sEl.GetString() ?? "") : "";
+                    string det = root.TryGetProperty("detail", out var dEl) ? (dEl.GetString() ?? "") : "";
+                    AddInternalEvent(cat, srcUrl, det);
+                    return;
+                }
+                if (type == "ui_action")
+                {
+                    if (_inspectorWindow is not null && !_inspectorWindow.IsCapturing) return;
+                    var act = new RecordedUiAction
+                    {
+                        Time = DateTime.Now.ToString("HH:mm:ss"),
+                        Action = root.TryGetProperty("action", out var aEl) ? (aEl.GetString() ?? "") : "",
+                        Tag = root.TryGetProperty("tag", out var tgEl) ? (tgEl.GetString() ?? "") : "",
+                        Selector = root.TryGetProperty("selector", out var sEl) ? (sEl.GetString() ?? "") : "",
+                        XPath = root.TryGetProperty("xpath", out var xpEl) ? (xpEl.GetString() ?? "") : "",
+                        FullXPath = root.TryGetProperty("fullXpath", out var fxpEl) ? (fxpEl.GetString() ?? "") : "",
+                        ElementId = root.TryGetProperty("id", out var eidEl) ? (eidEl.GetString() ?? "") : "",
+                        ElementName = root.TryGetProperty("name", out var enEl) ? (enEl.GetString() ?? "") : "",
+                        AriaLabel = root.TryGetProperty("aria", out var arEl) ? (arEl.GetString() ?? "") : "",
+                        DataTestId = root.TryGetProperty("testid", out var dtEl) ? (dtEl.GetString() ?? "") : "",
+                        Bounds = root.TryGetProperty("bounds", out var bEl) ? (bEl.GetString() ?? "") : "",
+                        Value = root.TryGetProperty("value", out var vEl) ? (vEl.GetString() ?? "") : "",
+                        PageUrl = root.TryGetProperty("url", out var uEl) ? (uEl.GetString() ?? "") : ""
+                    };
+                    Dispatcher.BeginInvoke(() =>
+                    {
+                        _recordedUi.Insert(0, act);
+                        if (_recordedUi.Count > 400) _recordedUi.RemoveAt(_recordedUi.Count - 1);
+                        TrayInspectorCount.Text = $"Captured: {_capturedNet.Count} API/Net | {_recordedUi.Count} UI actions";
+                    });
+                    return;
+                }
+                if (!WindowSyncManager.IsSyncEnabled || !ReferenceEquals(WindowSyncManager.MasterWindow, this)) return;
+                double x = root.TryGetProperty("x", out var xe) ? xe.GetDouble() : 0;
+                double y = root.TryGetProperty("y", out var ye) ? ye.GetDouble() : 0;
+                WindowSyncManager.BroadcastAction(this, type, x, y);
+            }
+            catch { }
+        };
+
+    }
+
+    private async void BtnOpenInspector_Click(object sender, RoutedEventArgs e)
     {
         if (_inspectorWindow is not null && _inspectorWindow.IsLoaded)
         {
@@ -1589,6 +1714,8 @@ public partial class BrowserWindow : Window
         _inspectorWindow = new InspectorWindow(_profile.Name, _capturedNet, _recordedUi, _internalEvents, FetchResponseBodyAsync);
         _inspectorWindow.Closed += (_, _) => _inspectorWindow = null;
         _inspectorWindow.Show();
+        foreach (var t in _tabs.ToList())
+            await AttachInspectorToTabAsync(t);
     }
 
     private async Task<string> FetchResponseBodyAsync(string requestId)
@@ -1789,12 +1916,18 @@ try {{
   }}
 }} catch (e) {{}}" : "";
 
-        string mediaBlock = _profile.MediaDeviceSpoof ? $@"
+        string prefCamJson = JsonSerializer.Serialize(_profile.PreferredCameraLabel ?? "");
+        string prefMicJson = JsonSerializer.Serialize(_profile.PreferredMicLabel ?? "");
+        string spoofMediaFlag = _profile.MediaDeviceSpoof ? "true" : "false";
+        string mediaBlock = $@"
 try {{
+  window.__mhPreferredCam = {prefCamJson};
+  window.__mhPreferredMic = {prefMicJson};
   if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {{
     const origEnum = navigator.mediaDevices.enumerateDevices.bind(navigator.mediaDevices);
     const origGUM = navigator.mediaDevices.getUserMedia ? navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices) : null;
     const sHex = '{seed:x8}';
+    const spoofIds = {spoofMediaFlag};
     const fakeToReal = new Map();
     const mapConstraint = (track) => {{
       if (!track || typeof track !== 'object' || !track.deviceId) return track;
@@ -1811,6 +1944,7 @@ try {{
     }};
     navigator.mediaDevices.enumerateDevices = async () => {{
       const devs = await origEnum();
+      if (!spoofIds) return devs;
       return devs.map((d, idx) => {{
         let outId = d.deviceId || '';
         if (outId && outId !== 'default' && outId !== 'communications') {{
@@ -1828,18 +1962,36 @@ try {{
       }});
     }};
     if (origGUM) {{
-      navigator.mediaDevices.getUserMedia = (constraints) => {{
+      navigator.mediaDevices.getUserMedia = async (constraints) => {{
         if (constraints && typeof constraints === 'object') {{
           const c = Object.assign({{}}, constraints);
           if (c.video) c.video = mapConstraint(c.video);
           if (c.audio) c.audio = mapConstraint(c.audio);
+          // Apply user-selected preferred camera / mic from Site Permissions dropdown
+          if ((c.video && window.__mhPreferredCam) || (c.audio && window.__mhPreferredMic)) {{
+            try {{
+              const realDevs = await origEnum();
+              if (c.video && window.__mhPreferredCam) {{
+                const cam = realDevs.find(d => d.kind === 'videoinput' && d.label === window.__mhPreferredCam);
+                if (cam && cam.deviceId) {{
+                  c.video = c.video === true ? {{ deviceId: {{ ideal: cam.deviceId }} }} : Object.assign({{}}, c.video, {{ deviceId: {{ ideal: cam.deviceId }} }});
+                }}
+              }}
+              if (c.audio && window.__mhPreferredMic) {{
+                const mic = realDevs.find(d => d.kind === 'audioinput' && d.label === window.__mhPreferredMic);
+                if (mic && mic.deviceId) {{
+                  c.audio = c.audio === true ? {{ deviceId: {{ ideal: mic.deviceId }} }} : Object.assign({{}}, c.audio, {{ deviceId: {{ ideal: mic.deviceId }} }});
+                }}
+              }}
+            }} catch {{}}
+          }}
           return origGUM(c);
         }}
         return origGUM(constraints);
       }};
     }}
   }}
-}} catch (e) {{}}" : "";
+}} catch (e) {{}}";
 
         string batteryNetBlock = _profile.BatteryNetSpoof ? $@"
 try {{

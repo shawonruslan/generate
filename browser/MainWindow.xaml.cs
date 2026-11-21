@@ -40,6 +40,7 @@ public partial class MainWindow : Window
     {
         base.OnSourceInitialized(e);
         App.ApplyDarkTitleBar(this);
+        App.SetWindowAppUserModelId(this, "MHAdvancedTool.Hub");
     }
 
     private void RefreshGroupsCombo()

@@ -155,18 +155,36 @@
                 </Grid>
             </Border>
 
-            <Border x:Name="SitePermissionsBar" Background="#FF14181F" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1" Visibility="Collapsed" Padding="12,6">
-                <Grid>
-                    <TextBlock x:Name="SitePermissionsOriginText" Text="Site Permissions"
-                               Foreground="{StaticResource Text}" FontSize="11.5" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,460,0" TextTrimming="CharacterEllipsis"/>
-                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                        <Button Style="{StaticResource GreenButton}" Content="Allow Cam &amp; Mic + Reload" Padding="10,3" FontSize="11" Margin="0,0,6,0" Click="BtnSiteAllowCamMic_Click"/>
-                        <Button Style="{StaticResource FlatButton}" Content="Block Cam &amp; Mic" Padding="10,3" FontSize="11" Margin="0,0,6,0" Click="BtnSiteBlockCamMic_Click"/>
-                        <Button Style="{StaticResource FlatButton}" Content="Allow Location" Padding="10,3" FontSize="11" Margin="0,0,6,0" Click="BtnSiteAllowLoc_Click"/>
-                        <Button Style="{StaticResource FlatButton}" Content="Allow Notif" Padding="10,3" FontSize="11" Margin="0,0,6,0" Click="BtnSiteAllowNotif_Click"/>
-                        <Button Style="{StaticResource FlatButton}" Content="X" Padding="8,3" FontSize="11" Click="BtnSitePermissionsClose_Click"/>
-                    </StackPanel>
-                </Grid>
+            <Border x:Name="SitePermissionsBar" Background="#FF14181F" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1" Visibility="Collapsed" Padding="12,7">
+                <StackPanel>
+                    <Grid Margin="0,0,0,6">
+                        <TextBlock x:Name="SitePermissionsOriginText" Text="Site Permissions"
+                                   Foreground="{StaticResource Text}" FontSize="11.5" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,460,0" TextTrimming="CharacterEllipsis"/>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <Button Style="{StaticResource GreenButton}" Content="Allow Cam &amp; Mic + Reload" Padding="10,3" FontSize="11" Margin="0,0,6,0" Click="BtnSiteAllowCamMic_Click"/>
+                            <Button Style="{StaticResource FlatButton}" Content="Block Cam &amp; Mic" Padding="10,3" FontSize="11" Margin="0,0,6,0" Click="BtnSiteBlockCamMic_Click"/>
+                            <Button Style="{StaticResource FlatButton}" Content="Allow Location" Padding="10,3" FontSize="11" Margin="0,0,6,0" Click="BtnSiteAllowLoc_Click"/>
+                            <Button Style="{StaticResource FlatButton}" Content="Allow Notif" Padding="10,3" FontSize="11" Margin="0,0,6,0" Click="BtnSiteAllowNotif_Click"/>
+                            <Button Style="{StaticResource FlatButton}" Content="X" Padding="8,3" FontSize="11" Click="BtnSitePermissionsClose_Click"/>
+                        </StackPanel>
+                    </Grid>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="12"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="10"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Camera:" Foreground="{StaticResource Muted}" FontSize="11" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <ComboBox x:Name="CbSiteCamera" Grid.Column="1" Style="{StaticResource DarkCombo}" FontSize="11" Padding="6,3"/>
+                        <TextBlock Grid.Column="3" Text="Mic:" Foreground="{StaticResource Muted}" FontSize="11" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <ComboBox x:Name="CbSiteMic" Grid.Column="4" Style="{StaticResource DarkCombo}" FontSize="11" Padding="6,3"/>
+                        <Button Grid.Column="6" Style="{StaticResource AccentButton}" Content="Apply Device &amp; Reload" Padding="10,3" FontSize="11" Click="BtnApplyMediaDevices_Click"/>
+                    </Grid>
+                </StackPanel>
             </Border>
         </StackPanel>
 
@@ -218,7 +236,7 @@
                                         <TextBlock Text="NETWORK &amp; UI ACTIVITY INSPECTOR" Style="{StaticResource SectionLabel}"/>
                                     </StackPanel>
                                     <Button Style="{StaticResource AccentButton}" Content="Open Reqable / Fiddler Inspector" Padding="10,8" FontSize="12" Click="BtnOpenInspector_Click"/>
-                                    <TextBlock x:Name="TrayInspectorCount" Text="Live capturing API requests &amp; UI actions" Foreground="{StaticResource Muted}" FontSize="10.5" Margin="0,6,0,0"/>
+                                    <TextBlock x:Name="TrayInspectorCount" Text="On-demand capture (opens cleanly without slowing pages)" Foreground="{StaticResource Muted}" FontSize="10.5" Margin="0,6,0,0"/>
                                 </StackPanel>
                             </Border>
 
