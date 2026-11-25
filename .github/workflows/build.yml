@@ -1,0 +1,410 @@
+name: Build AI Image Studio
+
+# Builds AI Image Studio (Flutter) for Windows + Android on GitHub's machines -
+# no Flutter / Visual Studio / Android SDK needed on your PC.
+#
+# How to use:
+#   1. Push this folder to a GitHub repository (as the repo root).
+#   2. GitHub -> Actions -> "Build AI Image Studio" -> Run workflow
+#      (choose windows / android / windows+android).
+#   3. Open the finished run -> Artifacts -> download:
+#        AIImageStudio-windows-x64-setup-v<version>.exe  -> real Windows installer
+#          (Next -> Install; Start-menu + Desktop shortcuts; Apps & features
+#          uninstall entry; upgrades in place)
+#        AIImageStudio-windows-x64-v<version>.zip        -> portable
+#          (extract + run AIImageStudio.exe, no install)
+#        AIImageStudio-v<version>-release.apk            -> Android installer
+#          (allow "install unknown apps" when asked; min Android 8.0)
+#   4. Push a version tag (git tag v1.0.0 && git push --tags) to also publish
+#      a GitHub Release with every file attached.
+#
+# Optional repository secrets for a stable Android signature
+# (Settings -> Secrets and variables -> Actions):
+#   KEYSTORE_BASE64    base64 of your .jks/.keystore file  (base64 -w0 release.jks)
+#   KEYSTORE_PASSWORD  keystore password
+#   KEY_ALIAS          key alias inside the keystore
+#   KEY_PASSWORD       key password
+# If the secrets are NOT set, a throwaway keystore is generated so the APK is
+# still installable for testing - but every build gets a different key, so
+# users cannot update in place. Add real secrets before distributing.
+
+on:
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: "Which builds to make"
+        type: choice
+        default: windows+android
+        options:
+          - windows+android
+          - windows
+          - android
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # needed to create the GitHub Release on tag pushes
+
+env:
+  # Pinned on purpose. `windows-2022` below = Visual Studio 2022, which this
+  # Flutter line detects reliably.
+  FLUTTER_VERSION: "3.35.x"
+  FLUTTER_CHANNEL: stable
+  # Sub-folder containing pubspec.yaml, or "auto" to find it
+  # (repo root or ./ai_image_studio).
+  PROJECT_DIR: auto
+
+jobs:
+  # ------------------------------------------------------------ Windows
+  windows:
+    name: Windows x64
+    if: ${{ github.event_name == 'push' || inputs.platforms == 'windows' || inputs.platforms == 'windows+android' }}
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Locate Flutter project
+        id: dir
+        shell: bash
+        run: |
+          set -euo pipefail
+          DIR="${PROJECT_DIR}"
+          if [ "$DIR" = "auto" ]; then
+            for c in . ai_image_studio; do
+              if [ -f "$c/pubspec.yaml" ]; then DIR="$c"; break; fi
+            done
+          fi
+          if [ ! -f "$DIR/pubspec.yaml" ]; then echo "::error::pubspec.yaml not found"; exit 1; fi
+          VERSION=$(grep -E '^version:' "$DIR/pubspec.yaml" | head -n1 | sed -E 's/version:[[:space:]]*//; s/\+.*//')
+          echo "dir=$DIR" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Project dir: $DIR  version: $VERSION"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Generate Windows runner (first run only)
+        working-directory: ${{ steps.dir.outputs.dir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter config --enable-windows-desktop
+          if [ ! -d windows ]; then
+            flutter create . --platforms=windows --project-name ai_image_studio --org com.aistudio
+          fi
+
+      - name: Pub get
+        working-directory: ${{ steps.dir.outputs.dir }}
+        run: flutter pub get
+
+      - name: Apply app icon + exe name
+        working-directory: ${{ steps.dir.outputs.dir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Pre-generated icon committed in assets/icon/app_icon.ico replaces the
+          # Flutter default; installer/windows.iss uses the same .ico file.
+          cp -f assets/icon/app_icon.ico windows/runner/resources/app_icon.ico
+          # exe metadata shown in Properties / Task Manager
+          sed -i 's/VALUE "FileDescription", "ai_image_studio"/VALUE "FileDescription", "AI Image Studio"/; s/VALUE "ProductName", "ai_image_studio"/VALUE "ProductName", "AI Image Studio"/; s/VALUE "CompanyName", "com.aistudio"/VALUE "CompanyName", "AI Image Studio"/' windows/runner/Runner.rc || true
+          # exe file name (AIImageStudio.exe) + initial window title
+          sed -i 's/set(BINARY_NAME "ai_image_studio")/set(BINARY_NAME "AIImageStudio")/' windows/CMakeLists.txt || true
+          sed -i 's/L"ai_image_studio"/L"AI Image Studio"/g' windows/runner/main.cpp || true
+
+      - name: Analyze (errors only)
+        working-directory: ${{ steps.dir.outputs.dir }}
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+
+      - name: Build Windows release
+        working-directory: ${{ steps.dir.outputs.dir }}
+        run: flutter build windows --release
+
+      - name: Package portable zip
+        id: pkg
+        working-directory: ${{ steps.dir.outputs.dir }}
+        shell: pwsh
+        run: |
+          $out = "AIImageStudio-windows-x64-v${{ steps.dir.outputs.version }}"
+          $rel = Get-ChildItem -Directory -Recurse build/windows | Where-Object { $_.FullName -match 'runner\\Release$' } | Select-Object -First 1
+          if (-not $rel) { Write-Error "Release folder not found under build/windows"; exit 1 }
+          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP/dist/$out" | Out-Null
+          Copy-Item -Path "$($rel.FullName)/*" -Destination "$env:RUNNER_TEMP/dist/$out" -Recurse
+          Copy-Item -Path README.md -Destination "$env:RUNNER_TEMP/dist/$out/README.md" -ErrorAction SilentlyContinue
+          Compress-Archive -Path "$env:RUNNER_TEMP/dist/$out" -DestinationPath "$env:RUNNER_TEMP/dist/$out.zip" -Force
+          "path=$env:RUNNER_TEMP/dist/$out.zip" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "name=$out" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Built $out.zip"
+
+      - name: Upload artifact (portable zip)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pkg.outputs.name }}
+          path: ${{ steps.pkg.outputs.path }}
+          if-no-files-found: error
+          retention-days: 30
+
+      # Real Windows installer (setup.exe) built with Inno Setup 6, which is
+      # pre-installed on the GitHub windows runners. Script lives in
+      # installer/ (installer/windows.iss).
+      - name: Build Windows installer (Inno Setup)
+        id: inst
+        working-directory: ${{ steps.dir.outputs.dir }}
+        shell: pwsh
+        run: |
+          # exit codes are checked explicitly below (native stderr chatter must not abort the step)
+          $ErrorActionPreference = "Continue"
+          $iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            Write-Host "Inno Setup not found on runner - installing via Chocolatey"
+            choco install innosetup --no-progress -y | Out-Null
+          }
+          if (-not (Test-Path $iscc)) { Write-Error "ISCC.exe not found at $iscc"; exit 1 }
+          $rel = Get-ChildItem -Directory -Recurse build/windows | Where-Object { $_.FullName -match 'runner\\Release$' } | Select-Object -First 1
+          if (-not $rel) { Write-Error "Release folder not found under build/windows"; exit 1 }
+          $ver  = "${{ steps.dir.outputs.version }}"
+          $name = "AIImageStudio-windows-x64-setup-v$ver"
+          $outDir = Join-Path $env:RUNNER_TEMP "dist-installer"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          $exeFile = Get-ChildItem -Path $rel.FullName -Filter *.exe -File | Select-Object -First 1
+          if (-not $exeFile) { Write-Error "No .exe in $($rel.FullName)"; exit 1 }
+          & $iscc "/DMyAppExeName=$($exeFile.Name)" "/DMyAppVersion=$ver" "/DMySourceDir=$($rel.FullName)" "/DMyOutputDir=$outDir" "/DMyOutputBaseFilename=$name" "installer\windows.iss"
+          if ($LASTEXITCODE -ne 0) { Write-Error "Inno Setup compile failed ($LASTEXITCODE)"; exit 1 }
+          $exe = Join-Path $outDir "$name.exe"
+          if (-not (Test-Path $exe)) { Write-Error "Installer not produced: $exe"; exit 1 }
+          Get-Item $exe | Format-List Name, Length
+          "path=$exe" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "name=$name" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Built $name.exe"
+
+      - name: Upload artifact (Windows installer)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.inst.outputs.name }}
+          path: ${{ steps.inst.outputs.path }}
+          if-no-files-found: error
+          retention-days: 30
+
+  # ------------------------------------------------------------ Android
+  android:
+    name: Android APK
+    if: ${{ github.event_name == 'push' || inputs.platforms == 'android' || inputs.platforms == 'windows+android' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Locate Flutter project
+        id: dir
+        run: |
+          set -euo pipefail
+          DIR="${PROJECT_DIR}"
+          if [ "$DIR" = "auto" ]; then
+            for c in . ai_image_studio; do
+              if [ -f "$c/pubspec.yaml" ]; then DIR="$c"; break; fi
+            done
+          fi
+          if [ ! -f "$DIR/pubspec.yaml" ]; then echo "::error::pubspec.yaml not found"; exit 1; fi
+          VERSION=$(grep -E '^version:' "$DIR/pubspec.yaml" | head -n1 | sed -E 's/version:[[:space:]]*//; s/\+.*//')
+          echo "dir=$DIR" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Project dir: $DIR  version: $VERSION"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: >-
+            platform-tools
+            platforms;android-35
+            build-tools;35.0.0
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Generate Android runner (first run only)
+        working-directory: ${{ steps.dir.outputs.dir }}
+        run: |
+          set -euo pipefail
+          flutter config --enable-android
+          if [ ! -d android ]; then
+            flutter create . --platforms=android --project-name ai_image_studio --org com.aistudio
+          fi
+
+      - name: Patch Android manifest + signing
+        working-directory: ${{ steps.dir.outputs.dir }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import re
+          # 1) display name + INTERNET permission (needed for the Cloudinary API)
+          mp = 'android/app/src/main/AndroidManifest.xml'
+          s = open(mp).read()
+          s = s.replace('android:label="ai_image_studio"', 'android:label="AI Image Studio"')
+          if 'android.permission.INTERNET' not in s:
+              s = re.sub(r'(<manifest[^>]*>)',
+                         r'\1\n    <uses-permission android:name="android.permission.INTERNET"/>',
+                         s, count=1)
+          open(mp, 'w').write(s)
+          # 2) release signing: CI keystore when KEYSTORE_PATH is set, debug key otherwise
+          bg = 'android/app/build.gradle.kts'
+          s = open(bg).read()
+          if 'KEYSTORE_PATH' not in s:
+              s = s.replace(
+                  '    buildTypes {',
+                  '''    signingConfigs {
+                  create("release") {
+                      val ksPath = System.getenv("KEYSTORE_PATH")
+                      if (!ksPath.isNullOrEmpty()) {
+                          storeFile = file(ksPath)
+                          storePassword = System.getenv("KEYSTORE_PASSWORD")
+                          keyAlias = System.getenv("KEY_ALIAS")
+                          keyPassword = System.getenv("KEY_PASSWORD")
+                      }
+                  }
+              }
+              buildTypes {''',
+                  1)
+              s = s.replace(
+                  'signingConfig = signingConfigs.getByName("debug")',
+                  'signingConfig = if (!System.getenv("KEYSTORE_PATH").isNullOrEmpty()) signingConfigs.getByName("release") else signingConfigs.getByName("debug")')
+          open(bg, 'w').write(s)
+          print('android patched: label, INTERNET permission, signing config')
+          PY
+
+      - name: Pub get
+        working-directory: ${{ steps.dir.outputs.dir }}
+        run: flutter pub get
+
+      - name: Apply app icons (Android)
+        working-directory: ${{ steps.dir.outputs.dir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Pre-generated icons committed under assets/icon/android/ replace the
+          # Flutter defaults: legacy PNGs + a proper adaptive icon (anydpi-v26).
+          # The adaptive icon is what Android 8+ launchers actually display,
+          # so shipping only PNGs would leave the default Flutter icon visible.
+          for d in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
+            mkdir -p "android/app/src/main/res/mipmap-$d"
+            cp -f "assets/icon/android/mipmap-$d/ic_launcher.png" "android/app/src/main/res/mipmap-$d/ic_launcher.png"
+            cp -f "assets/icon/android/mipmap-$d/ic_launcher_foreground.png" "android/app/src/main/res/mipmap-$d/ic_launcher_foreground.png"
+          done
+          mkdir -p "android/app/src/main/res/mipmap-anydpi-v26" "android/app/src/main/res/values"
+          cp -f "assets/icon/android/mipmap-anydpi-v26/ic_launcher.xml" "android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml"
+          cp -f "assets/icon/android/mipmap-anydpi-v26/ic_launcher_round.xml" "android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml"
+          cp -f "assets/icon/android/values/ai_studio_colors.xml" "android/app/src/main/res/values/ai_studio_colors.xml"
+          ls android/app/src/main/res | grep -E "mipmap|values"
+
+      - name: Prepare signing keystore
+        id: keystore
+        working-directory: ${{ steps.dir.outputs.dir }}
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KS_PATH="$RUNNER_TEMP/release.keystore"
+
+          if [ -n "${KEYSTORE_BASE64}" ]; then
+            echo "Using keystore from repository secrets."
+            echo "${KEYSTORE_BASE64}" | base64 --decode > "$KS_PATH"
+            echo "KEYSTORE_PASSWORD=${KEYSTORE_PASSWORD}" >> "$GITHUB_ENV"
+            echo "KEY_ALIAS=${KEY_ALIAS}"                 >> "$GITHUB_ENV"
+            echo "KEY_PASSWORD=${KEY_PASSWORD}"           >> "$GITHUB_ENV"
+            echo "signed_with=secrets" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::No KEYSTORE_BASE64 secret found - generating a throwaway keystore. Add signing secrets before distributing this APK."
+            keytool -genkeypair -v \
+              -keystore "$KS_PATH" -storetype PKCS12 \
+              -alias aiimagestudio -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass tempstorepass -keypass tempstorepass \
+              -dname "CN=AI Image Studio CI, OU=CI, O=AIImageStudio, C=US"
+            echo "KEYSTORE_PASSWORD=tempstorepass" >> "$GITHUB_ENV"
+            echo "KEY_ALIAS=aiimagestudio"         >> "$GITHUB_ENV"
+            echo "KEY_PASSWORD=tempstorepass"     >> "$GITHUB_ENV"
+            echo "signed_with=throwaway" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "KEYSTORE_PATH=$KS_PATH" >> "$GITHUB_ENV"
+
+      - name: Build release APK
+        working-directory: ${{ steps.dir.outputs.dir }}
+        run: flutter build apk --release
+
+      - name: Collect APK
+        id: apk
+        working-directory: ${{ steps.dir.outputs.dir }}
+        run: |
+          set -euo pipefail
+          APK=$(find build/app/outputs/flutter-apk -name 'app-release.apk' | head -n 1)
+          if [ -z "$APK" ]; then
+            echo "::error::app-release.apk not found under build/app/outputs/flutter-apk"
+            exit 1
+          fi
+          OUT_NAME="AIImageStudio-v${{ steps.dir.outputs.version }}-release.apk"
+          mkdir -p "$RUNNER_TEMP/dist"
+          cp "$APK" "$RUNNER_TEMP/dist/$OUT_NAME"
+          echo "Built: $OUT_NAME ($(du -h "$APK" | cut -f1))"
+          echo "path=$RUNNER_TEMP/dist/$OUT_NAME" >> "$GITHUB_OUTPUT"
+          echo "name=$OUT_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Verify APK signature
+        run: |
+          set -euo pipefail
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n 1)
+          "$APKSIGNER" verify --print-certs "${{ steps.apk.outputs.path }}"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AIImageStudio-android-apk
+          path: ${{ steps.apk.outputs.path }}
+          if-no-files-found: error
+          retention-days: 30
+
+  # ------------------------------------------------------------ Release
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, android]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          name: AI Image Studio ${{ github.ref_name }}
+          files: dist/**
+          generate_release_notes: true
+          body: |
+            AI Image Studio **${{ github.ref_name }}** - Cloudinary text-to-image & image-to-image generator.
+
+            * Windows (recommended): run `AIImageStudio-windows-x64-setup-v....exe` -> Next -> Install. Adds Start-menu + Desktop shortcuts and an Apps & features uninstall entry. Unsigned build: if SmartScreen shows "Windows protected your PC", click *More info -> Run anyway*.
+            * Windows portable: extract the `.zip` and run `AIImageStudio.exe` (keep all files together).
+            * Android: install the `-release.apk` (allow "install unknown apps" when asked). Min Android 8.0.
+
+            First launch: open Settings (gear icon) and add your Cloudinary cloud name, API key and secret. The Image Generation add-on must be enabled on your Cloudinary account. Signed with: throwaway keystore unless you add the KEYSTORE_* repository secrets.
