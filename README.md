@@ -482,3 +482,11 @@ JPEG only, **2800x2400 (7:6 = 1.4:1.2)**, max 25 MP, max 8 MB, and an **extensio
 - Task polling is adaptive: first check after 1.2 s, then every 1.5 s for the first 30 s, 2.5 s up to 90 s, then 4 s. The old fixed 3 s step added about 1.5-3 s of dead time to every image (and to every stage of a set).
 - Live timer while generating (home and batch): "queued on Cloudinary 6s" / "rendering 14s".
 - Each result shows where the time went: total / queue (waiting on Cloudinary) / render (the model working). A long queue time is Cloudinary-side load; a long render time comes from the model and resolution (2K/4K and premium models are slower).
+
+
+## Built-in FFmpeg (v1.18)
+
+FFmpeg ships inside the app; nothing to download or install.
+* Windows: `ffmpeg\ffmpeg.exe` next to `AIImageStudio.exe` (zip + installer).
+* Android: `lib/arm64-v8a/libffmpeg.so` inside the APK, built by CI from source
+  (`android_native/build_ffmpeg_android.sh`, audio + LAME MP3).

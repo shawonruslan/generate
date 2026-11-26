@@ -20,9 +20,14 @@ class GeckoSignInActivity : Activity() {
     private var session: GeckoSession? = null
     private var closing = false
     private var currentUrl = ""
+    private var mode = "gemini"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        mode = intent.getStringExtra("mode") ?: "gemini"
+        if (mode == "stable_audio") {
+            GeckoBridge.saSignInActivity = this
+        }
         val density = resources.displayMetrics.density
         fun dp(v: Int) = (v * density).toInt()
 
@@ -37,7 +42,7 @@ class GeckoSignInActivity : Activity() {
         bar.setPadding(dp(16), dp(6), dp(8), dp(6))
         bar.setBackgroundColor(Color.parseColor("#F1F3F4"))
         val title = TextView(this)
-        title.text = "Sign in to Google (Gemini)"
+        title.text = intent.getStringExtra("title") ?: "Sign in to Google (Gemini)"
         title.setTextColor(Color.parseColor("#202124"))
         title.textSize = 16f
         bar.addView(title, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
@@ -55,7 +60,7 @@ class GeckoSignInActivity : Activity() {
 
         val s = GeckoSession(
             GeckoSessionSettings.Builder()
-                .usePrivateMode(false)
+                .usePrivateMode(mode == "stable_audio")
                 .useTrackingProtection(false)
                 .build()
         )
@@ -82,7 +87,7 @@ class GeckoSignInActivity : Activity() {
 
     /** After each page load: signed in and back on Gemini -> close. */
     private fun checkSignedIn() {
-        if (closing) return
+        if (closing || mode != "gemini") return
         if (!currentUrl.startsWith("https://gemini.google.com")) return
         GeckoBridge.readCookies(this, 4000) { json ->
             if (!closing && GeckoBridge.hasPsid(json)) close()
@@ -111,7 +116,13 @@ class GeckoSignInActivity : Activity() {
         } catch (_: Exception) {
         }
         session = null
-        GeckoBridge.signInFinished(applicationContext)
+        if (mode == "stable_audio") {
+            if (GeckoBridge.saSignInActivity === this) {
+                GeckoBridge.finishStableAudio(null)
+            }
+        } else {
+            GeckoBridge.signInFinished(applicationContext)
+        }
         super.onDestroy()
     }
 }

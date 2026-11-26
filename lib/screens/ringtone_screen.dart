@@ -7,12 +7,12 @@ import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../app_theme.dart';
-import '../ringtone/audio_master.dart';
 import '../ringtone/ringtone_models.dart';
 import '../ringtone/ringtone_publish.dart';
 import '../ringtone/ringtone_service.dart';
 import '../ringtone/ringtone_texts.dart';
 import '../ringtone/stable_audio.dart';
+import '../ringtone/stable_audio_browser.dart';
 import '../widgets/ui_kit.dart';
 
 class RingtoneScreen extends StatefulWidget {
@@ -43,9 +43,6 @@ class _RingtoneScreenState extends State<RingtoneScreen> {
       accountFilter = 'All',
       categoryFilter = 'All',
       playing = '';
-  bool downloading = false;
-  double downloadProgress = 0;
-  String downloadStage = '';
 
   @override
   void initState() {
@@ -388,11 +385,45 @@ class _RingtoneScreenState extends State<RingtoneScreen> {
                     card(
                         Icons.account_circle_outlined, 'Stable Audio account', [
                       Text(s.stableAudio.hasToken
-                          ? 'Token connected${s.stableAudio.tokenExpiry == null ? '' : ' • expires ${s.stableAudio.tokenExpiry!.toLocal()}'}'
+                          ? '${s.stableAudio.activeLabel.isEmpty ? 'Token connected' : s.stableAudio.activeLabel}'
+                              '${s.stableAudio.tokenExpiry == null ? '' : ' • expires ${s.stableAudio.tokenExpiry!.toLocal()}'}'
+                              '${s.stableAudio.hasRefreshToken ? ' • auto-refresh ready' : ''}'
                           : 'No token connected'),
                       Text(s.stableAudio.credits == null
                           ? 'Credits: unavailable'
                           : 'Credits: ${s.stableAudio.credits!.remaining} / ${s.stableAudio.credits!.total}'),
+                      if (s.stableAudio.accounts.length > 1)
+                        Wrap(spacing: 6, runSpacing: 6, children: [
+                          for (final acc in s.stableAudio.accounts)
+                            InputChip(
+                              label: Text(
+                                '${acc.label.isEmpty ? acc.id : acc.label}'
+                                '${acc.lastRemaining != null ? ' (${acc.lastRemaining})' : ''}',
+                              ),
+                              selected: acc.id == s.stableAudio.activeAccountId,
+                              onSelected: s.running
+                                  ? null
+                                  : (_) => act(() async {
+                                        await s.stableAudio.selectAccount(acc.id);
+                                        await s.stableAudio.fetchCredits();
+                                        changed();
+                                      }),
+                              onDeleted: s.running
+                                  ? null
+                                  : () => act(() async {
+                                        await s.stableAudio.removeAccount(acc.id);
+                                        changed();
+                                      }),
+                            ),
+                        ]),
+                      toggle('Auto-refresh token', c.autoRefreshToken,
+                          (v) => c.autoRefreshToken = v,
+                          subtitle:
+                              'Renews short-lived access tokens automatically before they expire.'),
+                      toggle('Auto-rotate account when credits are low',
+                          c.autoRotateAccount, (v) => c.autoRotateAccount = v,
+                          subtitle:
+                              'Switches to another saved account or creates a fresh 50-credit account automatically.'),
                       TextField(
                           controller: token,
                           obscureText: true,
@@ -409,7 +440,23 @@ class _RingtoneScreenState extends State<RingtoneScreen> {
                           decoration: const InputDecoration(
                               labelText: 'Refresh token (optional)',
                               border: OutlineInputBorder())),
-                      Wrap(spacing: 8, children: [
+                      Wrap(spacing: 8, runSpacing: 8, children: [
+                        if (StableAudioBrowser.supported)
+                          FilledButton.icon(
+                              onPressed: s.running
+                                  ? null
+                                  : () => act(() async {
+                                        snack(
+                                            'Opening browser for Stable Audio sign-in...');
+                                        final ok =
+                                            await s.signInStableAudioBrowser();
+                                        changed();
+                                        snack(ok
+                                            ? 'Stable Audio account connected.'
+                                            : 'Sign-in cancelled or token not captured.');
+                                      }),
+                              icon: const Icon(Icons.login),
+                              label: const Text('Sign in with browser')),
                         FilledButton(
                             onPressed: s.running
                                 ? null
@@ -419,12 +466,13 @@ class _RingtoneScreenState extends State<RingtoneScreen> {
                                       if (a.access.isEmpty)
                                         throw Exception(
                                             'Paste a valid access token or token JSON.');
-                                      await s.stableAudio.setTokens(
+                                      await s.stableAudio.addAccount(
                                           accessToken: a.access,
                                           refreshToken:
                                               refresh.text.trim().isNotEmpty
                                                   ? refresh.text.trim()
-                                                  : a.refresh);
+                                                  : a.refresh,
+                                          makeActive: true);
                                       token.clear();
                                       refresh.clear();
                                       await s.stableAudio.fetchCredits();
@@ -433,6 +481,38 @@ class _RingtoneScreenState extends State<RingtoneScreen> {
                                           'Stable Audio token saved securely.');
                                     }),
                             child: const Text('Connect')),
+                        if (StableAudioBrowser.supported ||
+                            s.stableAudio.accounts.length > 1)
+                          OutlinedButton.icon(
+                              onPressed: s.running
+                                  ? null
+                                  : () => act(() async {
+                                        snack('Rotating Stable Audio token...');
+                                        final ok =
+                                            await s.rotateStableAudioAccount(
+                                                createNew: s.stableAudio.accounts
+                                                        .length <=
+                                                    1);
+                                        changed();
+                                        snack(ok
+                                            ? 'Rotated to ${s.stableAudio.activeLabel}.'
+                                            : 'Token rotation failed.');
+                                      }),
+                              icon: const Icon(Icons.autorenew),
+                              label: const Text('Rotate token')),
+                        if (s.stableAudio.hasRefreshToken)
+                          OutlinedButton(
+                              onPressed: s.running
+                                  ? null
+                                  : () => act(() async {
+                                        final ok =
+                                            await s.refreshStableAudioToken();
+                                        changed();
+                                        snack(ok
+                                            ? 'Access token refreshed.'
+                                            : 'Token refresh failed.');
+                                      }),
+                              child: const Text('Refresh token')),
                         OutlinedButton(
                             onPressed: s.running
                                 ? null
@@ -454,16 +534,16 @@ class _RingtoneScreenState extends State<RingtoneScreen> {
                             child: const Text('Disconnect')),
                       ]),
                       const Text(
-                          'Use your own Stable Audio session token. Tokens are sensitive; do not share them. A refresh token is optional.'),
+                          'Connect with your browser, paste a token/JSON, or rotate accounts. Tokens are stored securely on this device.'),
                     ]),
                     card(Icons.build_outlined, 'Mastering engine', [
                       Text(s.ffmpeg == null
-                          ? 'FFmpeg not found. Local WAV output is available; MP3 publishing needs FFmpeg.'
+                          ? 'Built-in FFmpeg did not start. Reinstall the app; local WAV output still works.'
                           : 'FFmpeg ${s.ffmpeg!.version} • ${s.ffmpeg!.path}'),
                       TextField(
                           controller: ffpath,
                           decoration: const InputDecoration(
-                              labelText: 'FFmpeg executable or folder',
+                              labelText: 'Custom FFmpeg path (optional)',
                               border: OutlineInputBorder())),
                       Wrap(spacing: 8, children: [
                         OutlinedButton(
@@ -476,35 +556,7 @@ class _RingtoneScreenState extends State<RingtoneScreen> {
                                           : 'FFmpeg ready.');
                                     }),
                             child: const Text('Use path / rescan')),
-                        if (Platform.isWindows)
-                          OutlinedButton(
-                              onPressed: downloading || s.running
-                                  ? null
-                                  : () => act(() async {
-                                        setState(() => downloading = true);
-                                        try {
-                                          final ff =
-                                              await FfmpegLocator.download(
-                                                  onProgress: (p, stage) {
-                                            if (mounted)
-                                              setState(() {
-                                                downloadProgress = p;
-                                                downloadStage = stage;
-                                              });
-                                          });
-                                          ffpath.text = ff.path;
-                                          await s.setFfmpegPath(ff.path);
-                                          snack('FFmpeg installed.');
-                                        } finally {
-                                          if (mounted)
-                                            setState(() => downloading = false);
-                                        }
-                                      }),
-                              child: const Text('Download FFmpeg'))
                       ]),
-                      if (downloading)
-                        Text(
-                            '$downloadStage ${downloadProgress < 0 ? '' : '${(downloadProgress * 100).round()}%'}'),
                     ]),
                     card(Icons.play_circle_outline, 'Generate', [
                       Text(s.task),

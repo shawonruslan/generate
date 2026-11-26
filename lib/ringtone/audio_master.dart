@@ -4,9 +4,7 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
-import 'package:archive/archive_io.dart';
-import 'package:http/http.dart' as http;
-import 'package:path_provider/path_provider.dart';
+import 'package:flutter/services.dart';
 
 import 'ringtone_models.dart';
 
@@ -17,21 +15,36 @@ class FfmpegInfo {
   const FfmpegInfo(this.path, this.version);
 }
 
-/// Finds (or downloads) ffmpeg. The workflow runs on a server where
-/// ffmpeg is simply installed; on a PC it may be missing, so the studio
-/// can fetch it once into the app's own data folder.
+/// Finds the FFmpeg that ships inside the app. Nothing is downloaded:
+///  * Windows: the build puts `ffmpeg\\ffmpeg.exe` next to the program
+///    (portable zip and installer both carry it).
+///  * Android: the APK carries `libffmpeg.so` (an FFmpeg executable) that
+///    Android unpacks into the app's native library folder.
+/// A custom path typed in the studio is only an optional override.
 class FfmpegLocator {
   FfmpegLocator._();
 
   static FfmpegInfo? _cached;
   static String _cachedFor = '\u0000';
 
+  static const _native = MethodChannel('ais/native');
+
   static String get exeName => Platform.isWindows ? 'ffmpeg.exe' : 'ffmpeg';
 
-  /// Folder the one-time download is unpacked into.
-  static Future<Directory> appDir() async {
-    final base = await getApplicationSupportDirectory();
-    return Directory('${base.path}${Platform.pathSeparator}ffmpeg');
+  /// Where the bundled copy lives on this platform (null when unknown).
+  static Future<String?> bundledPath() async {
+    try {
+      if (Platform.isAndroid) {
+        final dir = await _native.invokeMethod<String>('nativeLibDir');
+        if (dir == null || dir.isEmpty) return null;
+        return '$dir/libffmpeg.so';
+      }
+      final sep = Platform.pathSeparator;
+      final exeDir = File(Platform.resolvedExecutable).parent.path;
+      return '$exeDir${sep}ffmpeg$sep$exeName';
+    } catch (_) {
+      return null;
+    }
   }
 
   static Future<String?> _version(String path) async {
@@ -46,55 +59,30 @@ class FfmpegLocator {
     }
   }
 
-  /// [custom] (the path typed in the studio) first, then the app's own
-  /// copy, a copy next to the program, PATH and the usual install
-  /// folders. Null when none runs.
+  /// Bundled copy first, then [custom] (optional override), then a copy
+  /// next to the program / on PATH (developer runs). Null when none runs.
   static Future<FfmpegInfo?> find({String custom = '', bool refresh = false}) async {
-    if (Platform.isAndroid || Platform.isIOS) return null;
+    if (Platform.isIOS) return null;
     custom = custom.trim();
     if (!refresh && _cachedFor == custom && _cached != null) return _cached;
     final sep = Platform.pathSeparator;
     final candidates = <String>[];
+    final bundled = await bundledPath();
+    if (bundled != null) candidates.add(bundled);
     if (custom.isNotEmpty) {
       candidates.add(custom);
-      // A folder was given: look for the binary inside it.
       candidates.add('$custom$sep$exeName');
       candidates.add('$custom${sep}bin$sep$exeName');
     }
-    try {
-      candidates.add('${(await appDir()).path}$sep$exeName');
-    } catch (_) {}
-    try {
-      final exeDir = File(Platform.resolvedExecutable).parent.path;
-      candidates.add('$exeDir$sep$exeName');
-      candidates.add('$exeDir${sep}ffmpeg$sep$exeName');
-    } catch (_) {}
-    candidates.add(exeName); // PATH
-    if (Platform.isWindows) {
-      final env = Platform.environment;
-      for (final root in [
-        env['ProgramFiles'],
-        env['ProgramFiles(x86)'],
-        env['LOCALAPPDATA'],
-        env['ChocolateyInstall'],
-        r'C:',
-      ]) {
-        if (root == null || root.isEmpty) continue;
-        candidates.add('$root\\ffmpeg\\bin\\ffmpeg.exe');
-        candidates.add('$root\\bin\\ffmpeg.exe');
-      }
-      final home = env['USERPROFILE'];
-      if (home != null) {
-        candidates.add('$home\\scoop\\shims\\ffmpeg.exe');
+    if (!Platform.isAndroid) {
+      try {
         candidates.add(
-            '$home\\AppData\\Local\\Microsoft\\WinGet\\Links\\ffmpeg.exe');
+            '${File(Platform.resolvedExecutable).parent.path}$sep$exeName');
+      } catch (_) {}
+      candidates.add(exeName); // PATH
+      if (!Platform.isWindows) {
+        candidates.addAll(const ['/usr/bin/ffmpeg', '/usr/local/bin/ffmpeg']);
       }
-    } else {
-      candidates.addAll(const [
-        '/usr/bin/ffmpeg',
-        '/usr/local/bin/ffmpeg',
-        '/opt/homebrew/bin/ffmpeg',
-      ]);
     }
     for (final c in candidates) {
       if (c != exeName && !File(c).existsSync()) continue;
@@ -111,98 +99,6 @@ class FfmpegLocator {
   static void forget() {
     _cached = null;
     _cachedFor = '\u0000';
-  }
-
-  /// Official Windows build (gyan.dev "essentials", linked from
-  /// ffmpeg.org). About 100 MB to download, one time.
-  static const windowsZipUrl =
-      'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip';
-
-  /// Downloads the Windows build and unpacks only `ffmpeg.exe` into
-  /// [appDir]. [onProgress] gets 0..1 (or -1 while the size is unknown).
-  static Future<FfmpegInfo> download({
-    void Function(double fraction, String stage)? onProgress,
-    String? url,
-    http.Client? client,
-    Directory? into,
-  }) async {
-    if (!Platform.isWindows && url == null) {
-      throw Exception('Automatic download is only available on Windows. '
-          'Install ffmpeg with the system package manager instead.');
-    }
-    final dir = into ?? await appDir();
-    await dir.create(recursive: true);
-    final sep = Platform.pathSeparator;
-    final zipFile = File('${dir.path}${sep}ffmpeg_download.zip');
-    final c = client ?? http.Client();
-    try {
-      final req = http.Request('GET', Uri.parse(url ?? windowsZipUrl));
-      final resp = await c.send(req).timeout(const Duration(seconds: 60));
-      if (resp.statusCode < 200 || resp.statusCode >= 300) {
-        throw Exception('Download failed (HTTP ${resp.statusCode}).');
-      }
-      final total = resp.contentLength ?? 0;
-      var got = 0;
-      final sink = zipFile.openWrite();
-      try {
-        await for (final chunk
-            in resp.stream.timeout(const Duration(seconds: 60))) {
-          sink.add(chunk);
-          got += chunk.length;
-          onProgress?.call(total > 0 ? got / total : -1, 'Downloading');
-        }
-      } finally {
-        await sink.close();
-      }
-      if (total > 0 && got < total) {
-        throw Exception('Download was cut off ($got of $total bytes).');
-      }
-      onProgress?.call(1, 'Unpacking');
-      final target = File('${dir.path}$sep$exeName');
-      final tmp = File('${target.path}.part');
-      final input = InputFileStream(zipFile.path);
-      var found = false;
-      try {
-        final archive = ZipDecoder().decodeBuffer(input);
-        for (final f in archive.files) {
-          final name = f.name.replaceAll('\\', '/').toLowerCase();
-          if (!f.isFile ||
-              !(name == exeName || name.endsWith('/$exeName'))) {
-            continue;
-          }
-          final out = OutputFileStream(tmp.path);
-          try {
-            f.writeContent(out);
-          } finally {
-            await out.close();
-          }
-          found = true;
-          break;
-        }
-      } finally {
-        await input.close();
-      }
-      if (!found) {
-        throw Exception('The downloaded archive has no $exeName inside.');
-      }
-      if (target.existsSync()) target.deleteSync();
-      tmp.renameSync(target.path);
-      if (!Platform.isWindows) {
-        await Process.run('chmod', ['+x', target.path]);
-      }
-      forget();
-      final v = await _version(target.path);
-      if (v == null) {
-        throw Exception('The downloaded ffmpeg does not start on this PC.');
-      }
-      _cachedFor = '';
-      return _cached = FfmpegInfo(target.path, v);
-    } finally {
-      if (client == null) c.close();
-      try {
-        if (zipFile.existsSync()) zipFile.deleteSync();
-      } catch (_) {}
-    }
   }
 }
 

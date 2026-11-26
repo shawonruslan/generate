@@ -56,8 +56,19 @@ class MainActivity : FlutterActivity() {
                 }
             }
 
+        // Bundled FFmpeg: shipped in the APK as jniLibs/arm64-v8a/libffmpeg.so
+        // and extracted by Android to nativeLibraryDir (executable folder).
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "ais/native")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "nativeLibDir" -> result.success(applicationInfo.nativeLibraryDir)
+                    else -> result.notImplemented()
+                }
+            }
+
         val ch = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "ais/gecko")
         GeckoBridge.channel = ch
+        GeckoBridge.saChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "ais/stable_audio")
         ch.setMethodCallHandler { call, result ->
                 try {
                     when (call.method) {
@@ -91,6 +102,13 @@ class MainActivity : FlutterActivity() {
                             result.success(it)
                         }
                         "browserIsOpen" -> result.success(GeckoBridge.hasBrowserSession())
+                        "stableAudioSignIn" -> GeckoBridge.stableAudioSignIn(this, result)
+                        "stableAudioAutoCreate" -> GeckoBridge.stableAudioAutoCreate(
+                            applicationContext,
+                            call.argument<String>("email") ?: "",
+                            call.argument<String>("password") ?: "",
+                            result
+                        )
                         else -> result.notImplemented()
                     }
                 } catch (e: Throwable) {

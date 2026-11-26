@@ -12,10 +12,18 @@ const NAMES = new Set([
 const DOMAINS = new Set([".google.com", "google.com", "gemini.google.com", ".gemini.google.com"]);
 let port = null;
 const tabs = new Set();
+const saTabs = new Set();
 let basket = { srcs: [], v: 0, pages: 0 };
+let saAuto = null; // { email, password }
 
 function toTabs(m) {
   for (const t of tabs) {
+    try { t.postMessage(m); } catch (e) {}
+  }
+}
+
+function toSaTabs(m) {
+  for (const t of saTabs) {
     try { t.postMessage(m); } catch (e) {}
   }
 }
@@ -61,10 +69,28 @@ function fromApp(msg) {
       break;
     case "status": toTabs({ type: "status", src: msg.src, state: msg.state, message: msg.message || "" }); break;
     case "toast": toTabs({ type: "toast", msg: msg.msg || "" }); break;
+    case "sa_auto":
+      saAuto = msg.email ? { email: msg.email, password: msg.password || "" } : null;
+      if (saAuto) toSaTabs({ type: "sa_auto", email: saAuto.email, password: saAuto.password });
+      break;
+    case "sa_otp":
+      toSaTabs({ type: "sa_otp", otp: msg.otp || "" });
+      break;
   }
 }
 
 browser.runtime.onConnect.addListener((p) => {
+  if (p.name === "ais-sa") {
+    saTabs.add(p);
+    if (saAuto) p.postMessage({ type: "sa_auto", email: saAuto.email, password: saAuto.password });
+    p.onMessage.addListener((m) => {
+      if (m && (m.type === "sa_token" || m.type === "sa_need_otp") && port) {
+        port.postMessage(m);
+      }
+    });
+    p.onDisconnect.addListener(() => saTabs.delete(p));
+    return;
+  }
   if (p.name !== "ais-tab") return;
   tabs.add(p);
   p.postMessage({ type: "basket", srcs: basket.srcs, v: basket.v, pages: basket.pages });

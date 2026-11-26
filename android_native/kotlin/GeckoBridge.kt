@@ -42,6 +42,7 @@ object GeckoBridge {
 
     /** Channel to the Flutter app (set by MainActivity). */
     var channel: MethodChannel? = null
+    var saChannel: MethodChannel? = null
 
     /** Last basket from the app, re-sent when the extension (re)connects. */
     private var lastBasket: JSONObject? = null
@@ -53,6 +54,11 @@ object GeckoBridge {
 
     /** Result of the running sign-in screen (one at a time). */
     private var signInResult: MethodChannel.Result? = null
+
+    /** Result & session for Stable Audio sign-in / auto-create. */
+    private var saResult: MethodChannel.Result? = null
+    private var saSession: GeckoSession? = null
+    var saSignInActivity: GeckoSignInActivity? = null
 
     fun runtime(context: Context): GeckoRuntime {
         runtime?.let { return it }
@@ -94,6 +100,25 @@ object GeckoBridge {
         if (o.optString("type") == "q") {
             // Picture requests from the overlay -> app.
             channel?.invokeMethod("browserRequest", o.toString())
+            return
+        }
+        if (o.optString("type") == "sa_token") {
+            finishStableAudio(o.toString())
+            return
+        }
+        if (o.optString("type") == "sa_need_otp") {
+            main.post {
+                (saChannel ?: channel)?.invokeMethod("pollStableAudioOtp", null, object : MethodChannel.Result {
+                    override fun success(result: Any?) {
+                        val otp = result as? String
+                        if (!otp.isNullOrEmpty()) {
+                            post(JSONObject().put("cmd", "sa_otp").put("otp", otp))
+                        }
+                    }
+                    override fun error(code: String, msg: String?, details: Any?) {}
+                    override fun notImplemented() {}
+                })
+            }
             return
         }
         if (!o.has("id")) return
@@ -285,6 +310,61 @@ object GeckoBridge {
     fun browserFetch(context: Context, src: String, done: (String?) -> Unit) {
         request(context, JSONObject().put("cmd", "fetch").put("src", src), 45000) { o ->
             done(o?.optString("data")?.takeIf { it.startsWith("data:") })
+        }
+    }
+
+    // --------------------------------------------------- Stable Audio auth
+    fun stableAudioSignIn(activity: Activity, result: MethodChannel.Result) {
+        saResult?.success(null)
+        saResult = result
+        post(JSONObject().put("cmd", "sa_auto").put("email", ""))
+        runtime(activity)
+        val i = Intent(activity, GeckoSignInActivity::class.java)
+        i.putExtra("url", "https://stableaudio.com")
+        i.putExtra("mode", "stable_audio")
+        i.putExtra("title", "Sign in to Stable Audio")
+        activity.startActivity(i)
+    }
+
+    fun stableAudioAutoCreate(
+        context: Context,
+        email: String,
+        password: String,
+        result: MethodChannel.Result
+    ) {
+        saResult?.success(null)
+        saResult = result
+        val rt = runtime(context)
+        post(JSONObject().put("cmd", "sa_auto").put("email", email).put("password", password))
+        val s = GeckoSession(
+            GeckoSessionSettings.Builder()
+                .usePrivateMode(true)
+                .useTrackingProtection(false)
+                .build()
+        )
+        saSession = s
+        s.open(rt)
+        s.setActive(true)
+        s.loadUri("https://stableaudio.com")
+        main.postDelayed({
+            if (saSession === s) finishStableAudio(null)
+        }, 120000)
+    }
+
+    fun finishStableAudio(json: String?) {
+        main.post {
+            post(JSONObject().put("cmd", "sa_auto").put("email", ""))
+            try {
+                saSession?.close()
+            } catch (_: Exception) {
+            }
+            saSession = null
+            val act = saSignInActivity
+            saSignInActivity = null
+            act?.finish()
+            val r = saResult ?: return@post
+            saResult = null
+            r.success(json)
         }
     }
 }

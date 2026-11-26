@@ -14,6 +14,7 @@ class AndroidGecko {
   AndroidGecko._();
 
   static const _ch = MethodChannel('ais/gecko');
+  static const _saCh = MethodChannel('ais/stable_audio');
 
   static bool get supported => isAndroidUi;
 
@@ -37,4 +38,41 @@ class AndroidGecko {
   static Future<List<Map<String, dynamic>>> refresh() async =>
       _decode(await _ch.invokeMethod<String>('refresh')
           .timeout(const Duration(seconds: 60)));
+
+  /// Opens Stable Audio in GeckoView so the user can sign in and returns
+  /// `{accessToken, refreshToken, clientId}`.
+  static Future<Map<String, dynamic>?> signInStableAudio() async {
+    final raw = await _ch.invokeMethod<String>('stableAudioSignIn');
+    if (raw == null || raw.trim().isEmpty) return null;
+    final v = jsonDecode(raw);
+    return v is Map ? v.cast<String, dynamic>() : null;
+  }
+
+  /// Creates a fresh Stable Audio account in a private GeckoView session
+  /// using [email]/[password] and [onPollOtp] to fetch the 6-digit OTP.
+  static Future<Map<String, dynamic>?> autoCreateStableAudio({
+    required String email,
+    required String password,
+    required Future<String?> Function() onPollOtp,
+  }) async {
+    _saCh.setMethodCallHandler((call) async {
+      if (call.method == 'pollStableAudioOtp') {
+        return await onPollOtp();
+      }
+      return null;
+    });
+    try {
+      final raw = await _ch
+          .invokeMethod<String>('stableAudioAutoCreate', {
+            'email': email,
+            'password': password,
+          })
+          .timeout(const Duration(seconds: 130));
+      if (raw == null || raw.trim().isEmpty) return null;
+      final v = jsonDecode(raw);
+      return v is Map ? v.cast<String, dynamic>() : null;
+    } finally {
+      _saCh.setMethodCallHandler(null);
+    }
+  }
 }

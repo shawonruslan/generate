@@ -126,6 +126,41 @@ jobs:
         working-directory: ${{ steps.dir.outputs.dir }}
         run: flutter build windows --release
 
+      # FFmpeg ships INSIDE the app (Release\ffmpeg\ffmpeg.exe) so the
+      # portable zip and the installer work with nothing else installed.
+      - name: Bundle FFmpeg (built-in, no download on user PC)
+        working-directory: ${{ steps.dir.outputs.dir }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $rel = Get-ChildItem -Directory -Recurse build/windows | Where-Object { $_.FullName -match 'runner\\Release$' } | Select-Object -First 1
+          if (-not $rel) { Write-Error "Release folder not found under build/windows"; exit 1 }
+          $zip = Join-Path $env:RUNNER_TEMP "ffmpeg.zip"
+          $urls = @(
+            "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip",
+            "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+          )
+          $ok = $false
+          foreach ($u in $urls) {
+            for ($i = 1; $i -le 3 -and -not $ok; $i++) {
+              try { Write-Host "Downloading $u (try $i)"; Invoke-WebRequest -Uri $u -OutFile $zip -UseBasicParsing; $ok = $true }
+              catch { Write-Host "  failed: $($_.Exception.Message)"; Start-Sleep -Seconds 5 }
+            }
+            if ($ok) { break }
+          }
+          if (-not $ok) { Write-Error "Could not download FFmpeg"; exit 1 }
+          $tmp = Join-Path $env:RUNNER_TEMP "ffmpeg-x"
+          Expand-Archive -Path $zip -DestinationPath $tmp -Force
+          $exe = Get-ChildItem -Path $tmp -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+          if (-not $exe) { Write-Error "ffmpeg.exe not in archive"; exit 1 }
+          $dest = Join-Path $rel.FullName "ffmpeg"
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          Copy-Item $exe.FullName (Join-Path $dest "ffmpeg.exe") -Force
+          $lic = Get-ChildItem -Path $tmp -Recurse -Include LICENSE*,COPYING* | Select-Object -First 1
+          if ($lic) { Copy-Item $lic.FullName (Join-Path $dest "LICENSE.txt") -Force }
+          & (Join-Path $dest "ffmpeg.exe") -hide_banner -version | Select-Object -First 1
+          if ($LASTEXITCODE -ne 0) { Write-Error "Bundled ffmpeg.exe does not run"; exit 1 }
+
       - name: Package portable zip
         id: pkg
         working-directory: ${{ steps.dir.outputs.dir }}
@@ -351,6 +386,34 @@ jobs:
 
           echo "KEYSTORE_PATH=$KS_PATH" >> "$GITHUB_ENV"
 
+      # FFmpeg ships INSIDE the APK as jniLibs/arm64-v8a/libffmpeg.so,
+      # built from source with the NDK (audio + LAME MP3). Cached per script.
+      - name: Cache Android FFmpeg
+        id: ffcache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/ffmpeg-android-out
+          key: ffmpeg-android-arm64-${{ hashFiles('**/android_native/build_ffmpeg_android.sh') }}
+
+      - name: Build FFmpeg for Android (built-in, no download on phone)
+        if: steps.ffcache.outputs.cache-hit != 'true'
+        working-directory: ${{ steps.dir.outputs.dir }}
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y --no-install-recommends nasm >/dev/null 2>&1 || true
+          mkdir -p "$RUNNER_TEMP/ffmpeg-android-out"
+          bash android_native/build_ffmpeg_android.sh "$RUNNER_TEMP/ffmpeg-android-out/libffmpeg.so"
+
+      - name: Bundle FFmpeg into APK
+        working-directory: ${{ steps.dir.outputs.dir }}
+        run: |
+          set -euo pipefail
+          SO="$RUNNER_TEMP/ffmpeg-android-out/libffmpeg.so"
+          test -s "$SO" || { echo "::error::libffmpeg.so missing"; exit 1; }
+          mkdir -p android/app/src/main/jniLibs/arm64-v8a
+          cp -f "$SO" android/app/src/main/jniLibs/arm64-v8a/libffmpeg.so
+          ls -la android/app/src/main/jniLibs/arm64-v8a
+
       - name: Build release APK
         working-directory: ${{ steps.dir.outputs.dir }}
         # arm64 only: the built-in GeckoView engine is bundled for arm64-v8a
@@ -366,6 +429,10 @@ jobs:
           if [ -z "$APK" ]; then
             echo "::error::app-release.apk not found under build/app/outputs/flutter-apk"
             exit 1
+          fi
+          unzip -l "$APK" > "$RUNNER_TEMP/apk-list.txt"
+          if ! grep -q 'lib/arm64-v8a/libffmpeg.so' "$RUNNER_TEMP/apk-list.txt"; then
+            echo "::error::libffmpeg.so is not inside the APK"; exit 1
           fi
           OUT_NAME="AIImageStudio-v${{ steps.dir.outputs.version }}-release.apk"
           mkdir -p "$RUNNER_TEMP/dist"

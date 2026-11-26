@@ -109,6 +109,14 @@ class RingtoneConfig {
   /// like the workflow. Off: takes stay local until "Publish".
   bool autoPublish;
 
+  /// Automatically renew the WorkOS access token in the background and on
+  /// startup when a refresh token is saved.
+  bool autoRefreshToken;
+
+  /// Automatically rotate to the next saved account (or create a fresh
+  /// 50-credit account) when credits run low or auth fails.
+  bool autoRotateAccount;
+
   RingtoneConfig({
     this.masterPrompt = defaultMasterPrompt,
     this.negativePrompt = defaultNegativePrompt,
@@ -137,6 +145,8 @@ class RingtoneConfig {
     this.bitrate = '192k',
     this.seed = -1,
     this.autoPublish = true,
+    this.autoRefreshToken = true,
+    this.autoRotateAccount = true,
   });
 
   bool get isShort => lengthSeconds < 6 || soundType == 'Notification';
@@ -196,6 +206,8 @@ class RingtoneConfig {
         'bitrate': bitrate,
         'seed': seed,
         'autoPublish': autoPublish,
+        'autoRefreshToken': autoRefreshToken,
+        'autoRotateAccount': autoRotateAccount,
       };
 
   static RingtoneConfig fromJson(Map<String, dynamic> m) {
@@ -242,6 +254,8 @@ class RingtoneConfig {
       bitrate: s('bitrate', d.bitrate),
       seed: i('seed', d.seed),
       autoPublish: b('autoPublish', d.autoPublish),
+      autoRefreshToken: b('autoRefreshToken', d.autoRefreshToken),
+      autoRotateAccount: b('autoRotateAccount', d.autoRotateAccount),
     );
     c.normalize();
     return c;

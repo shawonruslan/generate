@@ -14,6 +14,7 @@ import 'package:ai_image_studio/ringtone/ringtone_policy.dart';
 import 'package:ai_image_studio/ringtone/ringtone_publish.dart';
 import 'package:ai_image_studio/ringtone/ringtone_service.dart';
 import 'package:ai_image_studio/ringtone/stable_audio.dart';
+import 'package:ai_image_studio/ringtone/temp_mail.dart';
 
 const reply =
     '[ENHANCED_PROMPT]Bright gentle piano with soft chimes[/ENHANCED_PROMPT]'
@@ -234,5 +235,112 @@ void main() {
         greaterThan(0));
     expect(File('${dir.path}/library.json').existsSync(), true);
     await dir.delete(recursive: true);
+  });
+
+  test('TempMail OTP extraction strips HTML and finds 6-digit code', () {
+    expect(
+        TempMailClient.extractSixDigitOtp(
+            html: '<style>.x{color:123456}</style><p>Code:&nbsp;<b>482910</b></p>'),
+        '482910');
+    expect(
+        TempMailClient.extractSixDigitOtp(subject: 'Verify code 901234'),
+        '901234');
+    expect(TempMailClient.extractSixDigitOtp(text: 'no code here'), null);
+  });
+
+  test('concurrent refreshToken deduplicates and fetchCredits auto-refreshes',
+      () async {
+    String fakeJwt(int expSec) {
+      final h = base64Url.encode(utf8.encode('{"alg":"none"}')).replaceAll('=', '');
+      final p = base64Url.encode(utf8.encode('{"exp":$expSec}')).replaceAll('=', '');
+      return '$h.$p.sig';
+    }
+
+    final expired = fakeJwt(1000);
+    final fresh = fakeJwt(
+        DateTime.now().millisecondsSinceEpoch ~/ 1000 + 3600);
+    var refreshCalls = 0;
+    final mock = MockClient((r) async {
+      if (r.url.host == 'api.workos.com') {
+        refreshCalls++;
+        return http.Response(
+            '{"access_token":"$fresh","refresh_token":"rt2"}', 200);
+      }
+      if (r.url.path.contains('balance')) {
+        expect(r.headers['Authorization'], 'Bearer $fresh');
+        return http.Response(
+            '{"attributes":{"generations_limit":44,"credits_per_period":50}}',
+            200);
+      }
+      return http.Response('', 404);
+    });
+
+    final c = StableAudioClient(
+        httpClient: mock, store: MemoryStableAudioStore());
+    await c.setTokens(accessToken: expired, refreshToken: 'rt1');
+    final results = await Future.wait([c.refreshToken(), c.refreshToken()]);
+    expect(results, [true, true]);
+    expect(refreshCalls, 1);
+
+    // Expired again -> fetchCredits auto-refreshes before reading balance.
+    await c.setTokens(accessToken: expired, refreshToken: 'rt2');
+    final bal = await c.fetchCredits();
+    expect(bal?.remaining, 44);
+    expect(c.accessToken, fresh);
+    c.dispose();
+  });
+
+  test('account rotation switches on low credits and falls back to auto-create',
+      () async {
+    var autoCreated = false;
+    final mock = MockClient((r) async {
+      final auth = r.headers['Authorization'] ?? '';
+      if (r.url.path.contains('balance')) {
+        if (auth == 'Bearer tok1') {
+          return http.Response(
+              '{"attributes":{"generations_limit":2,"credits_per_period":50}}',
+              200);
+        }
+        if (auth == 'Bearer tok2') {
+          return http.Response(
+              '{"attributes":{"generations_limit":48,"credits_per_period":50}}',
+              200);
+        }
+        if (auth == 'Bearer tok3') {
+          return http.Response(
+              '{"attributes":{"generations_limit":50,"credits_per_period":50}}',
+              200);
+        }
+      }
+      if (r.url.path.endsWith('compose-from-plan')) {
+        if (auth == 'Bearer tok2') {
+          return http.Response('rate limit exceeded', 429);
+        }
+        if (auth == 'Bearer tok3') {
+          return http.Response('{"job_id":"job-rot"}', 200);
+        }
+      }
+      return http.Response('', 404);
+    });
+
+    final c = StableAudioClient(
+        httpClient: mock, store: MemoryStableAudioStore());
+    c.onAutoCreateAccount = () async {
+      autoCreated = true;
+      return StableAudioAccount(
+          id: 'acc_new', label: 'new@mail.tm', accessToken: 'tok3');
+    };
+    await c.addAccount(accessToken: 'tok1', label: 'one@mail.tm');
+    await c.addAccount(
+        accessToken: 'tok2', label: 'two@mail.tm', makeActive: false);
+
+    // tok1 has 2 credits -> ensureReady rotates to tok2 (48 credits);
+    // tok2 hits 429 -> compose rotates to auto-created tok3.
+    final job = await c.compose('piano', RingtoneConfig(takesCount: 1, seed: 7));
+    expect(job.jobId, 'job-rot');
+    expect(autoCreated, true);
+    expect(c.accessToken, 'tok3');
+    expect(c.activeLabel, 'new@mail.tm');
+    c.dispose();
   });
 }

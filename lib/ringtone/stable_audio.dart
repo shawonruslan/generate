@@ -20,36 +20,127 @@ class StableAudioException implements Exception {
   String toString() => message;
 }
 
-/// The account tokens (the workflow's currentToken / currentRefreshToken
-/// / currentWorkosClientId / STABLE_AUDIO_DEVICE_ID).
-class StableAudioAuth {
+/// One saved Stable Audio account in the rotation pool.
+class StableAudioAccount {
+  String id;
+  String label;
   String accessToken;
   String refreshToken;
   String clientId;
   String deviceId;
+  int? lastRemaining;
+  int? lastTotal;
+  bool exhausted;
 
-  StableAudioAuth({
+  StableAudioAccount({
+    required this.id,
+    this.label = '',
     this.accessToken = '',
     this.refreshToken = '',
     this.clientId = StableAudioClient.defaultClientId,
     this.deviceId = '',
+    this.lastRemaining,
+    this.lastTotal,
+    this.exhausted = false,
   });
 
   Map<String, dynamic> toJson() => {
+        'id': id,
+        'label': label,
         'accessToken': accessToken,
         'refreshToken': refreshToken,
         'clientId': clientId,
         'deviceId': deviceId,
+        if (lastRemaining != null) 'lastRemaining': lastRemaining,
+        if (lastTotal != null) 'lastTotal': lastTotal,
+        if (exhausted) 'exhausted': exhausted,
       };
 
-  static StableAudioAuth fromJson(Map<String, dynamic> m) => StableAudioAuth(
+  static StableAudioAccount fromJson(Map<String, dynamic> m) =>
+      StableAudioAccount(
+        id: (m['id'] ?? '').toString(),
+        label: (m['label'] ?? '').toString(),
         accessToken: (m['accessToken'] ?? '').toString(),
         refreshToken: (m['refreshToken'] ?? '').toString(),
         clientId: (m['clientId'] ?? '').toString().isEmpty
             ? StableAudioClient.defaultClientId
             : m['clientId'].toString(),
         deviceId: (m['deviceId'] ?? '').toString(),
+        lastRemaining:
+            m['lastRemaining'] is num ? (m['lastRemaining'] as num).toInt() : null,
+        lastTotal:
+            m['lastTotal'] is num ? (m['lastTotal'] as num).toInt() : null,
+        exhausted: m['exhausted'] == true,
       );
+}
+
+/// The account tokens (the workflow's currentToken / currentRefreshToken
+/// / currentWorkosClientId / STABLE_AUDIO_DEVICE_ID) plus the rotation pool.
+class StableAudioAuth {
+  String accessToken;
+  String refreshToken;
+  String clientId;
+  String deviceId;
+  String label;
+  String activeAccountId;
+  List<StableAudioAccount> accounts;
+
+  StableAudioAuth({
+    this.accessToken = '',
+    this.refreshToken = '',
+    this.clientId = StableAudioClient.defaultClientId,
+    this.deviceId = '',
+    this.label = '',
+    this.activeAccountId = '',
+    List<StableAudioAccount>? accounts,
+  }) : accounts = accounts ?? [];
+
+  Map<String, dynamic> toJson() => {
+        'accessToken': accessToken,
+        'refreshToken': refreshToken,
+        'clientId': clientId,
+        'deviceId': deviceId,
+        if (label.isNotEmpty) 'label': label,
+        if (activeAccountId.isNotEmpty) 'activeAccountId': activeAccountId,
+        if (accounts.isNotEmpty)
+          'accounts': [for (final a in accounts) a.toJson()],
+      };
+
+  static StableAudioAuth fromJson(Map<String, dynamic> m) {
+    final rawList = m['accounts'];
+    final accounts = <StableAudioAccount>[
+      if (rawList is List)
+        for (final item in rawList)
+          if (item is Map)
+            StableAudioAccount.fromJson(item.cast<String, dynamic>()),
+    ];
+    final auth = StableAudioAuth(
+      accessToken: (m['accessToken'] ?? '').toString(),
+      refreshToken: (m['refreshToken'] ?? '').toString(),
+      clientId: (m['clientId'] ?? '').toString().isEmpty
+          ? StableAudioClient.defaultClientId
+          : m['clientId'].toString(),
+      deviceId: (m['deviceId'] ?? '').toString(),
+      label: (m['label'] ?? '').toString(),
+      activeAccountId: (m['activeAccountId'] ?? '').toString(),
+      accounts: accounts,
+    );
+    // Migrate legacy single-account storage into the pool automatically.
+    if (auth.accounts.isEmpty &&
+        (auth.accessToken.isNotEmpty || auth.refreshToken.isNotEmpty)) {
+      final migrated = StableAudioAccount(
+        id: 'acc_1',
+        label: auth.label.isNotEmpty ? auth.label : 'Account 1',
+        accessToken: auth.accessToken,
+        refreshToken: auth.refreshToken,
+        clientId: auth.clientId,
+        deviceId: auth.deviceId,
+      );
+      auth.accounts.add(migrated);
+      auth.activeAccountId = migrated.id;
+    }
+    return auth;
+  }
 }
 
 /// Where the tokens are kept. The app uses the OS secure storage; tests
@@ -172,6 +263,24 @@ class StableAudioClient {
   StableAudioAuth _auth = StableAudioAuth();
   bool _loaded = false;
   StableAudioCredits? credits;
+  Timer? _refreshTimer;
+  Future<bool>? _refreshing;
+  Future<bool>? _rotating;
+
+  /// When true, a background timer renews the WorkOS access token ~50s before
+  /// it expires, as long as a refresh token is available.
+  bool autoRefreshEnabled = true;
+
+  /// When true, `ensureReady` and `compose` rotate to the next saved account
+  /// (or call [onAutoCreateAccount]) if credits are low or auth fails.
+  bool autoRotateEnabled = true;
+
+  /// Called when tokens or the active account change (e.g. background refresh).
+  void Function()? onTokenChanged;
+
+  /// Optional callback (Windows Chrome CDP / Android GeckoView) that creates a
+  /// fresh 50-credit Stable Audio account when no saved account has credits.
+  Future<StableAudioAccount?> Function()? onAutoCreateAccount;
 
   /// Lines for the studio log.
   void Function(String line)? onLog;
@@ -180,15 +289,92 @@ class StableAudioClient {
   bool get hasToken => _auth.accessToken.isNotEmpty;
   bool get hasRefreshToken => _auth.refreshToken.isNotEmpty;
   String get accessToken => _auth.accessToken;
+  String get activeLabel => activeAccount?.label ?? _auth.label;
+  List<StableAudioAccount> get accounts => List.unmodifiable(_auth.accounts);
+  String get activeAccountId => _auth.activeAccountId;
+  StableAudioAccount? get activeAccount {
+    for (final a in _auth.accounts) {
+      if (a.id == _auth.activeAccountId) return a;
+    }
+    return _auth.accounts.isNotEmpty ? _auth.accounts.first : null;
+  }
+
+  void dispose() {
+    _refreshTimer?.cancel();
+    _refreshTimer = null;
+  }
+
+  void _syncActiveToPool() {
+    if (_auth.accessToken.isEmpty && _auth.refreshToken.isEmpty) return;
+    var acc = activeAccount;
+    if (acc == null) {
+      final id = 'acc_${DateTime.now().millisecondsSinceEpoch}';
+      acc = StableAudioAccount(
+        id: id,
+        label: _auth.label.isNotEmpty
+            ? _auth.label
+            : 'Account ${_auth.accounts.length + 1}',
+        accessToken: _auth.accessToken,
+        refreshToken: _auth.refreshToken,
+        clientId: _auth.clientId,
+        deviceId: _auth.deviceId,
+      );
+      _auth.accounts.add(acc);
+      _auth.activeAccountId = id;
+    } else {
+      acc.accessToken = _auth.accessToken;
+      acc.refreshToken = _auth.refreshToken;
+      acc.clientId = _auth.clientId;
+      acc.deviceId = _auth.deviceId;
+      if (_auth.label.isNotEmpty) acc.label = _auth.label;
+    }
+  }
+
+  void _applyAccount(StableAudioAccount acc) {
+    _auth.activeAccountId = acc.id;
+    _auth.accessToken = acc.accessToken;
+    _auth.refreshToken = acc.refreshToken;
+    _auth.clientId =
+        acc.clientId.isEmpty ? defaultClientId : acc.clientId;
+    _auth.deviceId = acc.deviceId.isEmpty ? uuid(_rnd) : acc.deviceId;
+    _auth.label = acc.label;
+    credits = (acc.lastRemaining != null)
+        ? StableAudioCredits(acc.lastRemaining!, acc.lastTotal ?? 50)
+        : null;
+  }
+
+  void _scheduleAutoRefresh() {
+    _refreshTimer?.cancel();
+    _refreshTimer = null;
+    if (!autoRefreshEnabled || _auth.refreshToken.isEmpty) return;
+    final exp = jwtExpSeconds(_auth.accessToken);
+    if (exp == null) return;
+    final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final waitSec = max(5, (exp - 50) - nowSec);
+    // Avoid scheduling absurdly long timers for far-future mock JWTs.
+    if (waitSec > 86400) return;
+    _refreshTimer = Timer(Duration(seconds: waitSec), () async {
+      if (!autoRefreshEnabled || _auth.refreshToken.isEmpty) return;
+      final ok = await refreshToken();
+      if (ok) {
+        await fetchCredits();
+        onTokenChanged?.call();
+      }
+    });
+  }
 
   Future<void> load() async {
     if (_loaded) return;
     _auth = await _store.load();
     if (_auth.deviceId.isEmpty) {
       _auth.deviceId = uuid(_rnd);
-      if (_auth.accessToken.isNotEmpty) await _store.save(_auth);
+      if (_auth.accessToken.isNotEmpty) {
+        _syncActiveToPool();
+        await _store.save(_auth);
+      }
     }
     _loaded = true;
+    _scheduleAutoRefresh();
   }
 
   /// RFC 4122 v4.
@@ -225,20 +411,119 @@ class StableAudioClient {
     return (access: access.trim(), refresh: refresh.trim());
   }
 
-  Future<void> setTokens({String? accessToken, String? refreshToken}) async {
+  Future<void> setTokens({
+    String? accessToken,
+    String? refreshToken,
+    String? clientId,
+    String? label,
+  }) async {
     await load();
     if (accessToken != null) _auth.accessToken = accessToken.trim();
     if (refreshToken != null) _auth.refreshToken = refreshToken.trim();
+    if (clientId != null && clientId.trim().isNotEmpty) {
+      _auth.clientId = clientId.trim();
+    }
+    if (label != null && label.trim().isNotEmpty) {
+      _auth.label = label.trim();
+    }
+    if (_auth.deviceId.isEmpty) _auth.deviceId = uuid(_rnd);
     credits = null;
+    _syncActiveToPool();
+    activeAccount?.exhausted = false;
     await _store.save(_auth);
+    _scheduleAutoRefresh();
+    onTokenChanged?.call();
+  }
+
+  /// Adds a new account to the rotation pool (or updates an existing one with
+  /// the same label) and optionally switches to it.
+  Future<StableAudioAccount> addAccount({
+    required String accessToken,
+    String refreshToken = '',
+    String clientId = '',
+    String label = '',
+    bool makeActive = true,
+  }) async {
+    await load();
+    final cleanLabel = label.trim();
+    StableAudioAccount? existing;
+    if (cleanLabel.isNotEmpty) {
+      for (final a in _auth.accounts) {
+        if (a.label.toLowerCase() == cleanLabel.toLowerCase()) {
+          existing = a;
+          break;
+        }
+      }
+    }
+    final acc = existing ??
+        StableAudioAccount(
+          id: 'acc_${DateTime.now().millisecondsSinceEpoch}_${_rnd.nextInt(9999)}',
+          label: cleanLabel.isNotEmpty
+              ? cleanLabel
+              : 'Account ${_auth.accounts.length + 1}',
+          deviceId: uuid(_rnd),
+        );
+    acc.accessToken = accessToken.trim();
+    if (refreshToken.trim().isNotEmpty) acc.refreshToken = refreshToken.trim();
+    if (clientId.trim().isNotEmpty) acc.clientId = clientId.trim();
+    acc.exhausted = false;
+    acc.lastRemaining = null;
+    if (existing == null) _auth.accounts.add(acc);
+    if (makeActive) _applyAccount(acc);
+    await _store.save(_auth);
+    if (makeActive) _scheduleAutoRefresh();
+    onTokenChanged?.call();
+    return acc;
+  }
+
+  Future<void> selectAccount(String id) async {
+    await load();
+    final target = _auth.accounts.where((a) => a.id == id).firstOrNull;
+    if (target == null) return;
+    _applyAccount(target);
+    await _store.save(_auth);
+    _scheduleAutoRefresh();
+    onTokenChanged?.call();
+  }
+
+  Future<void> removeAccount(String id) async {
+    await load();
+    _auth.accounts.removeWhere((a) => a.id == id);
+    if (_auth.activeAccountId == id) {
+      if (_auth.accounts.isNotEmpty) {
+        _applyAccount(_auth.accounts.first);
+      } else {
+        _auth.activeAccountId = '';
+        _auth.accessToken = '';
+        _auth.refreshToken = '';
+        _auth.label = '';
+        credits = null;
+      }
+    }
+    await _store.save(_auth);
+    _scheduleAutoRefresh();
+    onTokenChanged?.call();
   }
 
   Future<void> disconnect() async {
     await load();
-    _auth.accessToken = '';
-    _auth.refreshToken = '';
-    credits = null;
+    _refreshTimer?.cancel();
+    _refreshTimer = null;
+    if (_auth.activeAccountId.isNotEmpty) {
+      _auth.accounts.removeWhere((a) => a.id == _auth.activeAccountId);
+    }
+    if (_auth.accounts.isNotEmpty) {
+      _applyAccount(_auth.accounts.first);
+    } else {
+      _auth.activeAccountId = '';
+      _auth.accessToken = '';
+      _auth.refreshToken = '';
+      _auth.label = '';
+      credits = null;
+    }
     await _store.save(_auth);
+    _scheduleAutoRefresh();
+    onTokenChanged?.call();
   }
 
   /// `exp` (epoch seconds) of a JWT, null when it is not a JWT.
@@ -291,7 +576,17 @@ class StableAudioClient {
   }
 
   /// Swaps the refresh token for a new access token (same account).
-  Future<bool> refreshToken() async {
+  /// Concurrent calls share one in-flight request so single-use WorkOS
+  /// refresh tokens are never sent twice.
+  Future<bool> refreshToken() {
+    final active = _refreshing;
+    if (active != null) return active;
+    final run = _doRefreshToken();
+    _refreshing = run;
+    return run.whenComplete(() => _refreshing = null);
+  }
+
+  Future<bool> _doRefreshToken() async {
     await load();
     if (_auth.refreshToken.isEmpty) return false;
     try {
@@ -322,7 +617,10 @@ class StableAudioClient {
       // Refresh tokens are single-use: keep the rotated one or the
       // next refresh fails.
       if (rt is String && rt.isNotEmpty) _auth.refreshToken = rt;
+      _syncActiveToPool();
       await _store.save(_auth);
+      _scheduleAutoRefresh();
+      onTokenChanged?.call();
       _log('Stable Audio token refreshed.');
       return true;
     } catch (e) {
@@ -332,15 +630,30 @@ class StableAudioClient {
   }
 
   /// Remaining / total credits, null when they cannot be read.
-  Future<StableAudioCredits?> fetchCredits() async {
+  /// Automatically refreshes an expired token if a refresh token is saved.
+  Future<StableAudioCredits?> fetchCredits({bool allowRefresh = true}) async {
     await load();
+    if ((!hasToken || tokenExpired) && allowRefresh && hasRefreshToken) {
+      await refreshToken();
+    }
     if (!hasToken) return null;
     try {
-      final res = await _http.get(Uri.parse(_balanceUrl), headers: {
+      var res = await _http.get(Uri.parse(_balanceUrl), headers: {
         'Accept': '*/*',
         'Authorization': 'Bearer ${_auth.accessToken}',
         ..._origin,
       }).timeout(const Duration(seconds: 20));
+      if ((res.statusCode == 401 || res.statusCode == 403) &&
+          allowRefresh &&
+          hasRefreshToken) {
+        if (await refreshToken()) {
+          res = await _http.get(Uri.parse(_balanceUrl), headers: {
+            'Accept': '*/*',
+            'Authorization': 'Bearer ${_auth.accessToken}',
+            ..._origin,
+          }).timeout(const Duration(seconds: 20));
+        }
+      }
       if (res.statusCode < 200 || res.statusCode >= 300) return null;
       final data = jsonDecode(res.body);
       final attrs = data is Map ? data['attributes'] : null;
@@ -348,11 +661,89 @@ class StableAudioClient {
       final remaining = attrs['generations_limit'];
       final total = attrs['credits_per_period'];
       if (remaining is! num) return null;
-      return credits = StableAudioCredits(
-          remaining.toInt(), total is num ? total.toInt() : 50);
+      final rem = remaining.toInt();
+      final tot = total is num ? total.toInt() : 50;
+      final acc = activeAccount;
+      if (acc != null) {
+        acc.lastRemaining = rem;
+        acc.lastTotal = tot;
+        if (rem >= 4) acc.exhausted = false;
+        await _store.save(_auth);
+      }
+      return credits = StableAudioCredits(rem, tot);
     } catch (_) {
       return null;
     }
+  }
+
+  /// Rotates to the next saved account with at least [minCredits], or creates
+  /// a fresh account via [onAutoCreateAccount] when [createIfNone] is true.
+  Future<bool> rotateToNextAccount({
+    int minCredits = 4,
+    bool createIfNone = true,
+  }) {
+    final active = _rotating;
+    if (active != null) return active;
+    final run = _doRotate(minCredits: minCredits, createIfNone: createIfNone);
+    _rotating = run;
+    return run.whenComplete(() => _rotating = null);
+  }
+
+  Future<bool> _doRotate({
+    required int minCredits,
+    required bool createIfNone,
+  }) async {
+    await load();
+    final currentId = _auth.activeAccountId;
+    final candidates = [
+      for (final a in _auth.accounts)
+        if (a.id != currentId && !a.exhausted) a,
+    ];
+    for (final candidate in candidates) {
+      _log('Rotating to saved Stable Audio account "${candidate.label}"...');
+      _applyAccount(candidate);
+      if ((!hasToken || tokenExpired) && hasRefreshToken) {
+        await refreshToken();
+      }
+      if (!hasToken) continue;
+      final bal = await fetchCredits(allowRefresh: false);
+      if (bal == null || bal.remaining >= minCredits) {
+        await _store.save(_auth);
+        _scheduleAutoRefresh();
+        onTokenChanged?.call();
+        _log('Switched to Stable Audio account "${candidate.label}"'
+            '${bal == null ? '' : ' (${bal.remaining}/${bal.total} credits)'}.');
+        return true;
+      }
+      candidate.exhausted = true;
+    }
+
+    if (createIfNone && onAutoCreateAccount != null) {
+      _log('No other saved account has $minCredits+ credits — creating fresh Stable Audio account...');
+      final created = await onAutoCreateAccount!();
+      if (created != null && created.accessToken.isNotEmpty) {
+        await addAccount(
+          accessToken: created.accessToken,
+          refreshToken: created.refreshToken,
+          clientId: created.clientId,
+          label: created.label,
+          makeActive: true,
+        );
+        await fetchCredits(allowRefresh: false);
+        _log('Rotated to fresh Stable Audio account "${activeLabel}".');
+        return true;
+      }
+    }
+
+    // Restore original active account if rotation failed.
+    if (currentId.isNotEmpty) {
+      final orig = _auth.accounts.where((a) => a.id == currentId).firstOrNull;
+      if (orig != null) {
+        _applyAccount(orig);
+        await _store.save(_auth);
+      }
+    }
+    return false;
   }
 
   static const _connectHint =
@@ -362,31 +753,42 @@ class StableAudioClient {
   /// error (workflow `ensureStableAudioTokenAndCredits`).
   Future<void> ensureReady(int takesCount) async {
     await load();
+    final needed = max(4, takesCount * 4);
     if (!hasToken) {
       if (!await refreshToken()) {
-        throw const StableAudioException(
-            'No Stable Audio account connected. $_connectHint',
-            StableAudioFailure.auth);
+        if (!autoRotateEnabled ||
+            !await rotateToNextAccount(minCredits: needed)) {
+          throw const StableAudioException(
+              'No Stable Audio account connected. $_connectHint',
+              StableAudioFailure.auth);
+        }
       }
     }
     if (tokenExpired) {
       if (!await refreshToken()) {
-        throw StableAudioException(
-            hasRefreshToken
-                ? 'The Stable Audio sign-in expired and could not be renewed. $_connectHint'
-                : 'The Stable Audio access token expired (it only lasts a few minutes) and no refresh token is saved to renew it. $_connectHint',
-            StableAudioFailure.auth);
+        if (!autoRotateEnabled ||
+            !await rotateToNextAccount(minCredits: needed)) {
+          throw StableAudioException(
+              hasRefreshToken
+                  ? 'The Stable Audio sign-in expired and could not be renewed. $_connectHint'
+                  : 'The Stable Audio access token expired (it only lasts a few minutes) and no refresh token is saved to renew it. $_connectHint',
+              StableAudioFailure.auth);
+        }
       }
     }
-    final needed = max(4, takesCount * 4);
     final bal = await fetchCredits();
     if (bal != null) {
       _log('Stable Audio credits: ${bal.remaining}/${bal.total} '
           '(need about $needed for $takesCount take${takesCount == 1 ? '' : 's'}).');
       if (bal.remaining < needed) {
+        activeAccount?.exhausted = true;
+        if (autoRotateEnabled &&
+            await rotateToNextAccount(minCredits: needed)) {
+          return;
+        }
         throw StableAudioException(
             'Not enough Stable Audio credits: ${bal.remaining} left, about $needed needed for $takesCount take${takesCount == 1 ? '' : 's'}. '
-            'Lower "Takes", wait for the credits to renew, or connect another account.',
+            'Lower "Takes", rotate to another account, or wait for credits to renew.',
             StableAudioFailure.credits);
       }
     }
@@ -522,18 +924,30 @@ class StableAudioClient {
               low.contains('unauthorized') ||
               low.contains('unable to verify user token'));
       if (isAuth) {
-        if (!isRetry && await refreshToken()) {
-          // Same seed: the retry renders the takes the user asked for.
-          return compose(prompt, cfg, isRetry: true, seedOverride: baseSeed);
+        if (!isRetry) {
+          if (await refreshToken()) {
+            // Same seed: the retry renders the takes the user asked for.
+            return compose(prompt, cfg, isRetry: true, seedOverride: baseSeed);
+          }
+          if (autoRotateEnabled &&
+              await rotateToNextAccount(minCredits: takes * 4)) {
+            return compose(prompt, cfg, isRetry: true, seedOverride: baseSeed);
+          }
         }
         throw StableAudioException(
             'Stable Audio rejected the sign-in (HTTP ${res.statusCode}). $_connectHint',
             StableAudioFailure.auth);
       }
       if (isLimit) {
+        activeAccount?.exhausted = true;
+        if (!isRetry &&
+            autoRotateEnabled &&
+            await rotateToNextAccount(minCredits: takes * 4)) {
+          return compose(prompt, cfg, isRetry: true, seedOverride: baseSeed);
+        }
         throw StableAudioException(
             'Stable Audio refused the render (HTTP ${res.statusCode}): out of credits or rate limited. '
-            'Wait for the credits to renew or connect another account.'
+            'Wait for the credits to renew or rotate to another account.'
             '${err.isEmpty ? '' : ' [${_cut(err, 160)}]'}',
             StableAudioFailure.credits);
       }
@@ -568,15 +982,24 @@ class StableAudioClient {
       {bool Function()? cancelled,
       void Function(int done, int total)? onProgress}) async {
     final id = Uri.encodeComponent(jobId);
-    var refreshed = false;
+    DateTime? lastRefreshAttempt;
+    Future<bool> tryRefresh() async {
+      final now = DateTime.now();
+      if (lastRefreshAttempt != null &&
+          now.difference(lastRefreshAttempt!) < const Duration(seconds: 15)) {
+        return false;
+      }
+      lastRefreshAttempt = now;
+      return refreshToken();
+    }
+
     for (var i = 0; i < maxPolls; i++) {
       if (cancelled?.call() ?? false) {
         throw const StableAudioException('Stopped.', StableAudioFailure.job);
       }
       // Long renders can outlive the short-lived access token.
-      if (tokenExpired && !refreshed) {
-        refreshed = true;
-        await refreshToken();
+      if (tokenExpired) {
+        await tryRefresh();
       }
       final st = await _send(
           () => _http.get(Uri.parse('$wizardBase/status/$id'),
@@ -585,9 +1008,7 @@ class StableAudioClient {
           'Checking the render');
       if (st.statusCode < 200 || st.statusCode >= 300) {
         if ((st.statusCode == 401 || st.statusCode == 403) &&
-            !refreshed &&
-            await refreshToken()) {
-          refreshed = true;
+            await tryRefresh()) {
           continue;
         }
         throw StableAudioException(
@@ -619,12 +1040,21 @@ class StableAudioClient {
       await Future<void>.delayed(pollInterval);
     }
 
-    final res = await _send(
+    if (tokenExpired) await tryRefresh();
+    var res = await _send(
         () => _http.get(
             Uri.parse('$wizardBase/result/$id?include_audio=false'),
             headers: wizardHeaders({'Content-Type': 'application/json'})),
         const Duration(seconds: 30),
         'Reading the render result');
+    if ((res.statusCode == 401 || res.statusCode == 403) && await tryRefresh()) {
+      res = await _send(
+          () => _http.get(
+              Uri.parse('$wizardBase/result/$id?include_audio=false'),
+              headers: wizardHeaders({'Content-Type': 'application/json'})),
+          const Duration(seconds: 30),
+          'Reading the render result');
+    }
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw StableAudioException(
           'Render result fetch failed (HTTP ${res.statusCode}): ${_cut(res.body, 200)}',
@@ -666,11 +1096,19 @@ class StableAudioClient {
     }
     final url =
         '$wizardBase/stems/${Uri.encodeComponent(jobId)}/${Uri.encodeComponent(stem.name)}';
-    final r2 = await _send(
+    if (tokenExpired) await refreshToken();
+    var r2 = await _send(
         () => _http.get(Uri.parse(url),
             headers: wizardHeaders({'Accept': 'audio/*'})),
         const Duration(seconds: 60),
         'Downloading ${stem.name}');
+    if ((r2.statusCode == 401 || r2.statusCode == 403) && await refreshToken()) {
+      r2 = await _send(
+          () => _http.get(Uri.parse(url),
+              headers: wizardHeaders({'Accept': 'audio/*'})),
+          const Duration(seconds: 60),
+          'Downloading ${stem.name}');
+    }
     if (r2.statusCode < 200 || r2.statusCode >= 300) {
       throw StableAudioException(
           'Take download failed (HTTP ${r2.statusCode}) for ${stem.name}',

@@ -22,6 +22,17 @@
   "content_scripts": [
     {
       "matches": [
+        "https://*.stableaudio.com/*",
+        "https://*.authkit.app/*"
+      ],
+      "js": [
+        "stable_audio_hook.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": false
+    },
+    {
+      "matches": [
         "<all_urls>"
       ],
       "js": [

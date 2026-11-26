@@ -17,6 +17,7 @@ import 'ringtone_models.dart';
 import 'ringtone_policy.dart';
 import 'ringtone_publish.dart';
 import 'stable_audio.dart';
+import 'stable_audio_browser.dart';
 
 /// Outcome of one prompt of a batch.
 class RingtoneBatchResult {
@@ -60,6 +61,11 @@ class RingtoneService extends ChangeNotifier {
             ((c) => FfmpegLocator.find(custom: c, refresh: true)) {
     engine = RingtoneMetadataEngine(asker ?? _askGemini)..onLog = log;
     this.stableAudio.onLog = log;
+    this.stableAudio.onTokenChanged = notifyListeners;
+    if (StableAudioBrowser.supported) {
+      this.stableAudio.onAutoCreateAccount =
+          () => StableAudioBrowser.autoCreateAccount(onLog: log);
+    }
   }
 
   final http.Client _http;
@@ -165,13 +171,76 @@ class RingtoneService extends ChangeNotifier {
       } catch (_) {}
     }
     config.normalize();
+    _syncStableAudioFlags();
     try {
       await stableAudio.load();
+      if (config.autoRefreshToken &&
+          stableAudio.hasRefreshToken &&
+          (!stableAudio.hasToken || stableAudio.tokenExpired)) {
+        if (await stableAudio.refreshToken()) {
+          await stableAudio.fetchCredits(allowRefresh: false);
+        }
+      }
     } catch (_) {}
     await _loadLibrary();
     await refreshEnvironment();
     _ready = true;
     notifyListeners();
+  }
+
+  void _syncStableAudioFlags() {
+    stableAudio.autoRefreshEnabled = config.autoRefreshToken;
+    stableAudio.autoRotateEnabled = config.autoRotateAccount;
+  }
+
+  /// Opens the built-in/system browser so the user can sign in to Stable Audio
+  /// and automatically captures access + refresh tokens.
+  Future<bool> signInStableAudioBrowser() async {
+    final acc = await StableAudioBrowser.signInInteractive(onLog: log);
+    if (acc == null) return false;
+    await stableAudio.addAccount(
+      accessToken: acc.accessToken,
+      refreshToken: acc.refreshToken,
+      clientId: acc.clientId,
+      label: acc.label,
+      makeActive: true,
+    );
+    await stableAudio.fetchCredits();
+    notifyListeners();
+    return true;
+  }
+
+  /// Rotates to the next saved Stable Audio account with credits, or creates
+  /// a fresh 50-credit account via Temp-Mail + browser if [createNew] is true
+  /// or no other saved account has credits.
+  Future<bool> rotateStableAudioAccount({bool createNew = false}) async {
+    if (createNew) {
+      final created = await StableAudioBrowser.autoCreateAccount(onLog: log);
+      if (created == null) return false;
+      await stableAudio.addAccount(
+        accessToken: created.accessToken,
+        refreshToken: created.refreshToken,
+        clientId: created.clientId,
+        label: created.label,
+        makeActive: true,
+      );
+      await stableAudio.fetchCredits(allowRefresh: false);
+      notifyListeners();
+      return true;
+    }
+    final ok = await stableAudio.rotateToNextAccount(
+      minCredits: config.takesCount * 4,
+      createIfNone: true,
+    );
+    notifyListeners();
+    return ok;
+  }
+
+  Future<bool> refreshStableAudioToken() async {
+    final ok = await stableAudio.refreshToken();
+    if (ok) await stableAudio.fetchCredits(allowRefresh: false);
+    notifyListeners();
+    return ok;
   }
 
   /// Re-reads the distribution accounts and looks for ffmpeg again.
@@ -189,6 +258,7 @@ class RingtoneService extends ChangeNotifier {
 
   Future<void> saveConfig() async {
     config.normalize();
+    _syncStableAudioFlags();
     notifyListeners();
     if (!persist) return;
     try {
