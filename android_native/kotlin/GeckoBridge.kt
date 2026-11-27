@@ -1,0 +1,458 @@
+package com.aistudio.ai_image_studio
+
+import android.app.Activity
+import android.content.Context
+import android.content.Intent
+import android.os.Handler
+import android.os.Looper
+import io.flutter.plugin.common.MethodChannel
+import org.json.JSONArray
+import org.json.JSONObject
+import org.mozilla.geckoview.GeckoRuntime
+import org.mozilla.geckoview.GeckoRuntimeSettings
+import org.mozilla.geckoview.GeckoSession
+import org.mozilla.geckoview.GeckoSessionSettings
+import org.mozilla.geckoview.WebExtension
+
+/**
+ * Built-in Firefox engine (GeckoView) used only for the Gemini sign-in.
+ *
+ * Google refuses sign-in inside Android WebView, but GeckoView is a full
+ * browser engine (the one inside Firefox for Android). Its profile lives in
+ * the app's private data, so after one sign-in the session stays there and
+ * the Gemini cookies can be read again later - silently.
+ *
+ * The cookies are read by a tiny built-in WebExtension (assets/ais_cookies)
+ * that only returns the Google session cookies gemini.google.com uses.
+ */
+object GeckoBridge {
+    const val GEMINI_URL = "https://gemini.google.com/app"
+    const val SIGN_IN_URL =
+        "https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fgemini.google.com%2Fapp"
+
+    private const val EXT_URI = "resource://android/assets/ais_cookies/"
+    private const val EXT_ID = "ais-cookies@aistudio"
+
+    private val main = Handler(Looper.getMainLooper())
+    private var runtime: GeckoRuntime? = null
+    private var port: WebExtension.Port? = null
+    private val waitingForPort = mutableListOf<() -> Unit>()
+    private var nextId = 1
+    private val pending = mutableMapOf<Int, (JSONObject?) -> Unit>()
+
+    /** Channel to the Flutter app (set by MainActivity). */
+    var channel: MethodChannel? = null
+    var saChannel: MethodChannel? = null
+
+    /** Last basket from the app, re-sent when the extension (re)connects. */
+    private var lastBasket: JSONObject? = null
+
+    /** The Image to Prompt browser tab; kept while the app runs so the
+     * page survives leaving / reopening the browser screen. */
+    private var browserSession: GeckoSession? = null
+    var browserActivity: GeckoBrowserActivity? = null
+
+    /** Result of the running sign-in screen (one at a time). */
+    private var signInResult: MethodChannel.Result? = null
+
+    /** Result & session for Stable Audio sign-in / auto-create. */
+    private var saResult: MethodChannel.Result? = null
+    private var saSession: GeckoSession? = null
+    var saSignInActivity: GeckoSignInActivity? = null
+
+    fun runtime(context: Context): GeckoRuntime {
+        runtime?.let { return it }
+        val settings = GeckoRuntimeSettings.Builder()
+            .consoleOutput(false)
+            .aboutConfigEnabled(false)
+            .build()
+        val rt = GeckoRuntime.create(context.applicationContext, settings)
+        runtime = rt
+        installExtension(rt)
+        return rt
+    }
+
+    private fun installExtension(rt: GeckoRuntime) {
+        rt.webExtensionController.ensureBuiltIn(EXT_URI, EXT_ID).accept({ ext ->
+            ext?.setMessageDelegate(object : WebExtension.MessageDelegate {
+                override fun onConnect(p: WebExtension.Port) {
+                    port = p
+                    p.setDelegate(object : WebExtension.PortDelegate {
+                        override fun onPortMessage(message: Any, p2: WebExtension.Port) {
+                            onMessage(message)
+                        }
+
+                        override fun onDisconnect(p2: WebExtension.Port) {
+                            if (port === p2) port = null
+                        }
+                    })
+                    lastBasket?.let { b -> post(b) }
+                    val w = waitingForPort.toList()
+                    waitingForPort.clear()
+                    w.forEach { it() }
+                }
+            }, "ais")
+        }, { _ -> })
+    }
+
+    private fun onMessage(message: Any) {
+        val o = message as? JSONObject ?: return
+        if (o.optString("type") == "q") {
+            // Picture requests from the overlay -> app.
+            channel?.invokeMethod("browserRequest", o.toString())
+            return
+        }
+        if (o.optString("type") == "sa_token") {
+            finishStableAudio(o.toString())
+            return
+        }
+        if (o.optString("type") == "sa_need_otp") {
+            main.post {
+                (saChannel ?: channel)?.invokeMethod("pollStableAudioOtp", null, object : MethodChannel.Result {
+                    override fun success(result: Any?) {
+                        val otp = result as? String
+                        if (!otp.isNullOrEmpty()) {
+                            val p = port
+                            if (p != null) {
+                                post(JSONObject().put("cmd", "sa_otp").put("otp", otp))
+                            } else {
+                                waitingForPort.add { post(JSONObject().put("cmd", "sa_otp").put("otp", otp)) }
+                            }
+                        }
+                    }
+                    override fun error(code: String, msg: String?, details: Any?) {}
+                    override fun notImplemented() {}
+                })
+            }
+            return
+        }
+        if (!o.has("id")) return
+        val cb = pending.remove(o.optInt("id")) ?: return
+        cb(o)
+    }
+
+    private fun post(o: JSONObject): Boolean {
+        val p = port ?: return false
+        return try {
+            p.postMessage(o)
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun postWhenReady(context: Context, o: JSONObject) {
+        runtime(context)
+        if (!post(o)) {
+            waitingForPort.add { post(o) }
+        }
+    }
+
+    /** Sends [cmd] to the extension and waits for its answer. */
+    private fun request(context: Context, cmd: JSONObject, timeoutMs: Long,
+                        done: (JSONObject?) -> Unit) {
+        runtime(context)
+        var finished = false
+        val finish: (JSONObject?) -> Unit = { v ->
+            if (!finished) {
+                finished = true
+                done(v)
+            }
+        }
+        main.postDelayed({ finish(null) }, timeoutMs)
+        val ask: () -> Unit = {
+            val id = nextId++
+            pending[id] = { v -> finish(v) }
+            if (!post(cmd.put("id", id))) {
+                pending.remove(id)
+                finish(null)
+            }
+        }
+        if (port != null) ask() else waitingForPort.add(ask)
+    }
+
+    /** Gemini session cookies as a JSON array string (null = none/timeout). */
+    fun readCookies(context: Context, timeoutMs: Long = 8000, done: (String?) -> Unit) {
+        request(context, JSONObject().put("cmd", "get"), timeoutMs) { o ->
+            done(o?.optJSONArray("cookies")?.toString())
+        }
+    }
+
+    fun hasPsid(json: String?): Boolean {
+        if (json == null) return false
+        return try {
+            val a = JSONArray(json)
+            (0 until a.length()).any {
+                val c = a.getJSONObject(it)
+                c.optString("name") == "__Secure-1PSID" && c.optString("value").isNotEmpty()
+            }
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    // ------------------------------------------------------------ sign-in
+    fun signIn(activity: Activity, url: String?, result: MethodChannel.Result) {
+        signInResult?.success(null)
+        signInResult = result
+        runtime(activity)
+        val i = Intent(activity, GeckoSignInActivity::class.java)
+        i.putExtra("url", url ?: SIGN_IN_URL)
+        activity.startActivity(i)
+    }
+
+    /** Called by [GeckoSignInActivity] when it closes. */
+    fun signInFinished(context: Context) {
+        val r = signInResult ?: return
+        signInResult = null
+        readCookies(context) { json ->
+            r.success(if (hasPsid(json)) json else null)
+        }
+    }
+
+    // ------------------------------------------------------- silent refresh
+    /**
+     * Opens Gemini in an invisible tab of the signed-in profile so the
+     * engine renews the Google session itself, then returns the cookies.
+     */
+    fun refresh(context: Context, result: MethodChannel.Result) {
+        val rt = runtime(context)
+        var answered = false
+        val session = GeckoSession(
+            GeckoSessionSettings.Builder()
+                .usePrivateMode(false)
+                .useTrackingProtection(false)
+                .build()
+        )
+        val reply: () -> Unit = reply@{
+            if (answered) return@reply
+            answered = true
+            readCookies(context) { json ->
+                try {
+                    session.close()
+                } catch (_: Exception) {
+                }
+                result.success(if (hasPsid(json)) json else null)
+            }
+        }
+        session.progressDelegate = object : GeckoSession.ProgressDelegate {
+            override fun onPageStop(session: GeckoSession, success: Boolean) {
+                // Give the page a moment for its own cookie rotation.
+                main.postDelayed({ reply() }, 4000)
+            }
+        }
+        session.open(rt)
+        session.setActive(true)
+        session.loadUri(GEMINI_URL)
+        main.postDelayed({ reply() }, 30000)
+    }
+
+    // ------------------------------------------------- Gemini page transport
+    /** Hidden Gemini tab kept alive for in-browser Gemini requests. */
+    private var geminiSession: GeckoSession? = null
+    private var geminiTabReady = false
+    private val geminiTabWaiters = mutableListOf<() -> Unit>()
+
+    /**
+     * Makes sure a gemini.google.com tab is open in the signed-in profile
+     * (its gemini_bridge.js content script is what actually runs the
+     * requests), then calls [done]. The tab is invisible: it is a session
+     * that is never attached to a GeckoView.
+     */
+    private fun ensureGeminiTab(context: Context, done: () -> Unit) {
+        val existing = geminiSession
+        if (existing != null && existing.isOpen && geminiTabReady) {
+            done()
+            return
+        }
+        geminiTabWaiters.add(done)
+        if (existing != null && existing.isOpen) return // load already running
+        val rt = runtime(context)
+        geminiTabReady = false
+        val session = GeckoSession(
+            GeckoSessionSettings.Builder()
+                .usePrivateMode(false)
+                .useTrackingProtection(false)
+                .build()
+        )
+        geminiSession = session
+        var fired = false
+        val fire: () -> Unit = fire@{
+            if (fired) return@fire
+            fired = true
+            geminiTabReady = true
+            val w = geminiTabWaiters.toList()
+            geminiTabWaiters.clear()
+            // The content script connects a moment after page stop.
+            main.postDelayed({ w.forEach { it() } }, 1500)
+        }
+        session.progressDelegate = object : GeckoSession.ProgressDelegate {
+            override fun onPageStop(session: GeckoSession, success: Boolean) {
+                fire()
+            }
+        }
+        session.open(rt)
+        session.setActive(true)
+        session.loadUri(GEMINI_URL)
+        main.postDelayed({ fire() }, 25000)
+    }
+
+    /**
+     * Runs one HTTP request inside the signed-in Gemini tab (through the
+     * ais_cookies extension) and answers with the extension's JSON result
+     * ({s,u,b,ct,x,e}) or null on timeout. [payload] is the JSON the app
+     * sent: {m,u,h,b,f,fn,ft,t}.
+     */
+    fun geminiFetch(context: Context, payload: String, result: MethodChannel.Result) {
+        val p = try {
+            JSONObject(payload)
+        } catch (e: Exception) {
+            result.success(null)
+            return
+        }
+        ensureGeminiTab(context) {
+            val cmd = JSONObject()
+                .put("cmd", "gfetch")
+                .put("m", p.optString("m", "GET"))
+                .put("u", p.optString("u"))
+                .put("h", p.optJSONObject("h") ?: JSONObject())
+                .put("t", p.optLong("t", 120000))
+            if (!p.isNull("b")) cmd.put("b", p.optString("b"))
+            if (!p.isNull("f")) {
+                cmd.put("f", p.optString("f"))
+                cmd.put("fn", p.optString("fn", "image.jpg"))
+                cmd.put("ft", p.optString("ft", "image/jpeg"))
+            }
+            val timeoutMs = p.optLong("t", 120000) + 20000
+            request(context, cmd, timeoutMs) { o ->
+                result.success(o?.toString())
+            }
+        }
+    }
+
+    // ------------------------------------------------- Image to Prompt browser
+    fun browserSession(context: Context): GeckoSession {
+        browserSession?.let { if (it.isOpen) return it }
+        val s = GeckoSession(
+            GeckoSessionSettings.Builder()
+                .usePrivateMode(false)
+                .useTrackingProtection(true)
+                .build()
+        )
+        s.open(runtime(context))
+        browserSession = s
+        return s
+    }
+
+    fun hasBrowserSession(): Boolean = browserSession?.isOpen == true
+
+    fun browserOpen(activity: Activity, url: String?) {
+        val i = Intent(activity, GeckoBrowserActivity::class.java)
+        if (url != null) i.putExtra("url", url)
+        i.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+        activity.startActivity(i)
+    }
+
+    fun browserClose() {
+        browserActivity?.finish()
+        try {
+            browserSession?.close()
+        } catch (_: Exception) {
+        }
+        browserSession = null
+        browserState()
+    }
+
+    /** Tells the app whether the browser screen / tab exists. */
+    fun browserState() {
+        val o = JSONObject()
+            .put("open", hasBrowserSession())
+            .put("visible", browserActivity != null)
+        channel?.invokeMethod("browserState", o.toString())
+    }
+
+    fun browserBasket(json: String) {
+        val o = JSONObject(json).put("cmd", "basket")
+        lastBasket = o
+        post(o)
+    }
+
+    fun browserStatus(json: String) {
+        post(JSONObject(json).put("cmd", "status"))
+    }
+
+    fun browserToast(msg: String) {
+        post(JSONObject().put("cmd", "toast").put("msg", msg))
+    }
+
+    /** Screenshot of an area of the visible page (shares of the viewport:
+     *  {"x","y","w","h"} 0..1). Answers base64 PNG or null. */
+    fun browserCapture(json: String, done: (String?) -> Unit) {
+        val act = browserActivity
+        if (act == null) {
+            done(null)
+            return
+        }
+        try {
+            val o = JSONObject(json)
+            act.capture(o.optDouble("x"), o.optDouble("y"), o.optDouble("w"), o.optDouble("h"), done)
+        } catch (e: Exception) {
+            done(null)
+        }
+    }
+
+    /** Downloads a picture through the engine; answers a data: URL or null. */
+    fun browserFetch(context: Context, src: String, done: (String?) -> Unit) {
+        request(context, JSONObject().put("cmd", "fetch").put("src", src), 45000) { o ->
+            done(o?.optString("data")?.takeIf { it.startsWith("data:") })
+        }
+    }
+
+    // --------------------------------------------------- Stable Audio auth
+    fun stableAudioSignIn(activity: Activity, result: MethodChannel.Result) {
+        saResult?.success(null)
+        saResult = result
+        postWhenReady(activity, JSONObject().put("cmd", "sa_auto").put("email", ""))
+        val i = Intent(activity, GeckoSignInActivity::class.java)
+        i.putExtra("url", "https://stableaudio.com")
+        i.putExtra("mode", "stable_audio")
+        i.putExtra("title", "Sign in to Stable Audio")
+        activity.startActivity(i)
+    }
+
+    fun stableAudioAutoCreate(
+        activity: Activity,
+        email: String,
+        password: String,
+        result: MethodChannel.Result
+    ) {
+        saResult?.success(null)
+        saResult = result
+        postWhenReady(activity, JSONObject().put("cmd", "sa_auto").put("email", email).put("password", password))
+        val i = Intent(activity, GeckoSignInActivity::class.java)
+        i.putExtra("url", "https://stableaudio.com")
+        i.putExtra("mode", "stable_audio_auto")
+        i.putExtra("title", "Creating Stable Audio Account...")
+        activity.startActivity(i)
+        main.postDelayed({
+            if (saResult === result) finishStableAudio(null)
+        }, 120000)
+    }
+
+    fun finishStableAudio(json: String?) {
+        main.post {
+            post(JSONObject().put("cmd", "sa_auto").put("email", ""))
+            try {
+                saSession?.close()
+            } catch (_: Exception) {
+            }
+            saSession = null
+            val act = saSignInActivity
+            saSignInActivity = null
+            act?.finish()
+            val r = saResult ?: return@post
+            saResult = null
+            r.success(json)
+        }
+    }
+}
