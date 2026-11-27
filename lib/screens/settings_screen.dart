@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import '../api/api_client.dart';
 import '../providers/app_state.dart';
+import '../utils/format.dart';
 import '../utils/images.dart';
 import '../widgets/app_widgets.dart';
 
