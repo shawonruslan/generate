@@ -120,7 +120,7 @@ class GeminiApi {
         final text = await web.ask(input,
             attempts: 1,
             freshChat: true,
-            timeout: const Duration(seconds: 90));
+            timeout: const Duration(seconds: 60));
         if (text.trim().isEmpty) {
           lastErr = 'empty reply';
         } else if (expectJson && _extractJsonMap(text) == null) {

@@ -141,7 +141,7 @@ class RingtoneService extends ChangeNotifier {
     }
     try {
       return await c.ask(prompt,
-          attempts: 2, freshChat: true, timeout: const Duration(seconds: 90));
+          attempts: 2, freshChat: true, timeout: const Duration(seconds: 60));
     } on GeminiWebException catch (e) {
       // Build a new client next time: the session may have been renewed.
       if (e.expired) _gemini = null;
@@ -255,7 +255,12 @@ class RingtoneService extends ChangeNotifier {
         );
         await stableAudio.fetchCredits(allowRefresh: false);
         if (stableAudio.termsRequired) {
-          log('Account connected. Review and accept Stable Audio terms before generation.');
+          try {
+            await stableAudio.acceptTerms();
+            log('Stable Audio terms auto-accepted for the new account.');
+          } catch (_) {
+            log('Terms auto-accept failed once - generation will retry it.');
+          }
         }
         return true;
       }
@@ -269,7 +274,7 @@ class RingtoneService extends ChangeNotifier {
     }
   }
 
-  /// Only call after the user explicitly confirms acceptance for this account.
+  /// Manual accept from Settings; generation auto-accepts on its own.
   Future<bool> acceptStableAudioTerms() async {
     final ok = await stableAudio.acceptTerms();
     notifyListeners();

@@ -514,7 +514,20 @@ class GeminiWebClient {
   /// Set once the copied cookies were refused while the browser profile
   /// worked: later clients go to the browser first instead of failing
   /// (and re-reading cookies) on every single request.
-  static bool preferBrowser = false;
+  /// Browser-preference window: once the browser transport has
+  /// rescued a refused session, new clients go straight to it -
+  /// but only for 10 minutes (his complaint, 2026-11-27: ringtone
+  /// metadata / prompt enhance crawl because EVERY later call was
+  /// stuck on the slow browser relay for the whole app run).
+  /// After the window, clients try the fast direct-HTTP path
+  /// again - cookies renew themselves in the meantime, and the
+  /// work runs in the background with no browser involved.
+  static DateTime? _preferBrowserUntil;
+  static bool get preferBrowser =>
+      _preferBrowserUntil != null &&
+      DateTime.now().isBefore(_preferBrowserUntil!);
+  static set preferBrowser(bool v) => _preferBrowserUntil =
+      v ? DateTime.now().add(const Duration(minutes: 10)) : null;
 
   /// The transport in use: the controlled window, else the hidden profile.
   GeminiPageTransport? get _tx {

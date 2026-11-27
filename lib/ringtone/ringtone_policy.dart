@@ -112,6 +112,8 @@ class RingtonePolicy {
       if (v.isEmpty) return;
       final ip = policyIp.firstMatch(v);
       if (ip != null) out.add('$f: protected name "${ip.group(0)}"');
+      final nm = policyNames.firstMatch(v);
+      if (nm != null) out.add('$f: protected name "${nm.group(0)}"');
       final ad = policyAdult.firstMatch(v);
       if (ad != null) out.add('$f: adult term "${ad.group(0)}"');
       final hv = policyHarm.firstMatch(v);
@@ -122,7 +124,7 @@ class RingtonePolicy {
         if (_linkish.hasMatch(v)) out.add('$f: link/hashtag/handle');
       }
     });
-    return out;
+    return out.toSet().toList();
   }
 
   static List<String> issuesOf(RingtoneMeta m) => issues(
@@ -140,6 +142,7 @@ class RingtonePolicy {
       if (!_tagOk.hasMatch(w)) continue;
       if (out.contains(w) ||
           policyIp.hasMatch(w) ||
+          policyNames.hasMatch(w) ||
           policyAdult.hasMatch(w) ||
           policyHarm.hasMatch(w) ||
           policyPromo.hasMatch(w)) {

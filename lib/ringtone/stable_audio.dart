@@ -686,7 +686,9 @@ class StableAudioClient {
     }
   }
 
-  /// HAR-observed user update. Never called without explicit UI consent.
+  /// HAR-observed user update. Called automatically whenever the
+  /// account flags terms as pending (his standing instruction:
+  /// auto-accept, never a manual step) and from the Settings button.
   Future<bool> acceptTerms() async {
     await load();
     if ((!hasToken || tokenExpired) && !await refreshToken()) return false;
@@ -719,12 +721,33 @@ class StableAudioClient {
     return true;
   }
 
-  void _requireAcceptedTerms() {
-    if (termsRequired) {
-      throw const StableAudioException(
-        'Review and accept Stable Audio terms in the account panel before generating audio.',
-        StableAudioFailure.auth,
-      );
+  Future<void>? _termsAccepting;
+
+  /// Terms gate - AUTO-ACCEPTS (his standing instruction, repeated:
+  /// generation must never halt asking for a manual accept). When
+  /// the account flags terms as pending, the same accept PATCH the
+  /// Settings button used fires here and generation proceeds.
+  /// Only a failed accept request surfaces an error.
+  Future<void> _requireAcceptedTerms() async {
+    if (!termsRequired) return;
+    final running = _termsAccepting;
+    if (running != null) return running;
+    final run = () async {
+      try {
+        await acceptTerms();
+      } catch (_) {}
+      if (termsRequired) {
+        throw const StableAudioException(
+          'Stable Audio terms could not be accepted automatically - the accept request failed.',
+          StableAudioFailure.auth,
+        );
+      }
+    }();
+    _termsAccepting = run;
+    try {
+      await run;
+    } finally {
+      _termsAccepting = null;
     }
   }
 
@@ -845,7 +868,7 @@ class StableAudioClient {
       }
     }
     final bal = await fetchCredits();
-    _requireAcceptedTerms();
+    await _requireAcceptedTerms();
     if (bal != null) {
       _log('Stable Audio credits: ${bal.remaining}/${bal.total} '
           '(need about $needed for $takesCount take${takesCount == 1 ? '' : 's'}).');
@@ -853,7 +876,7 @@ class StableAudioClient {
         activeAccount?.exhausted = true;
         if (autoRotateEnabled &&
             await rotateToNextAccount(minCredits: needed)) {
-          _requireAcceptedTerms();
+          await _requireAcceptedTerms();
           return;
         }
         throw StableAudioException(
@@ -970,7 +993,7 @@ class StableAudioClient {
     final payload = buildPayload(finalPrompt, cfg, baseSeed);
 
     if (!isRetry) await ensureReady(takes);
-    _requireAcceptedTerms();
+    await _requireAcceptedTerms();
 
     final res = await _send(
         () => _http.post(Uri.parse('$wizardBase/compose-from-plan'),
@@ -988,7 +1011,10 @@ class StableAudioClient {
       if (low.contains('terms') &&
           (low.contains('accept') || low.contains('agree'))) {
         termsRequired = true;
-        _requireAcceptedTerms();
+        if (!isRetry) {
+          await _requireAcceptedTerms();
+          return compose(prompt, cfg, isRetry: true, seedOverride: baseSeed);
+        }
       }
       final isLimit = res.statusCode == 429 ||
           res.statusCode == 402 ||

@@ -1,7 +1,7 @@
 name: ai_image_studio
 description: MH STUDIO - Cloudinary text-to-image and image-to-image generator for Windows and Android.
 publish_to: "none"
-version: 1.24.0+62
+version: 1.29.0+67
 
 environment:
   sdk: ">=3.6.0 <4.0.0"

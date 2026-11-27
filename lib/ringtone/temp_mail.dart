@@ -19,7 +19,7 @@ class TempMailInbox {
   });
 }
 
-/// Pure-Dart temp-mail client (Mail.tm -> Mail.gw -> GuerrillaMail),
+/// Pure-Dart temp-mail client (GuerrillaMail -> Mail.tm -> Mail.gw),
 /// matching `generator.yml`'s `createTempMailAccount` & `pollTempMailForOtp`.
 class TempMailClient {
   TempMailClient({http.Client? httpClient, Random? random})
@@ -80,6 +80,38 @@ class TempMailClient {
     final f = _firsts[_rnd.nextInt(_firsts.length)];
     final l = _lasts[_rnd.nextInt(_lasts.length)];
 
+    // GuerrillaMail first (his log, 2026-11-27): it was the only
+    // provider that worked - mail.tm answered 403 and mail.gw
+    // burned a full timeout before GuerrillaMail succeeded.
+    Future<TempMailInbox?> tryGuerrilla() async {
+      try {
+        final gmRes = await _http
+            .get(Uri.parse(
+                'https://api.guerrillamail.com/ajax.php?f=get_email_address&lang=en'))
+            .timeout(const Duration(seconds: 10));
+        if (gmRes.statusCode >= 200 && gmRes.statusCode < 300) {
+          final gmData = jsonDecode(gmRes.body);
+          if (gmData is Map &&
+              gmData['email_addr'] != null &&
+              gmData['sid_token'] != null) {
+            final email = gmData['email_addr'].toString();
+            onLog?.call('Created GuerrillaMail inbox: $email');
+            return TempMailInbox(
+              provider: 'guerrilla',
+              email: email,
+              mailToken: gmData['sid_token'].toString(),
+            );
+          }
+        }
+      } catch (e) {
+        onLog?.call('GuerrillaMail failed ($e)');
+      }
+      return null;
+    }
+
+    final gFirst = await tryGuerrilla();
+    if (gFirst != null) return gFirst;
+
     for (final apiBase in const [
       'https://api.mail.tm',
       'https://api.mail.gw'
@@ -87,7 +119,7 @@ class TempMailClient {
       try {
         final domRes = await _http
             .get(Uri.parse('$apiBase/domains'))
-            .timeout(const Duration(seconds: 15));
+            .timeout(const Duration(seconds: 8));
         if (domRes.statusCode < 200 || domRes.statusCode >= 300) {
           throw Exception('domains HTTP ${domRes.statusCode}');
         }
@@ -120,7 +152,7 @@ class TempMailClient {
               },
               body: jsonEncode({'address': rawAddress, 'password': mailPw}),
             )
-            .timeout(const Duration(seconds: 15));
+            .timeout(const Duration(seconds: 8));
         if (accRes.statusCode < 200 || accRes.statusCode >= 300) {
           throw Exception('accounts HTTP ${accRes.statusCode}');
         }
@@ -142,7 +174,7 @@ class TempMailClient {
                 },
                 body: jsonEncode({'address': canonical, 'password': mailPw}),
               )
-              .timeout(const Duration(seconds: 15));
+              .timeout(const Duration(seconds: 8));
           if (tokRes.statusCode >= 200 && tokRes.statusCode < 300) {
             final tokData = jsonDecode(tokRes.body);
             if (tokData is Map && tokData['token'] != null) {
@@ -167,28 +199,8 @@ class TempMailClient {
       }
     }
 
-    try {
-      final gmRes = await _http
-          .get(Uri.parse(
-              'https://api.guerrillamail.com/ajax.php?f=get_email_address&lang=en'))
-          .timeout(const Duration(seconds: 15));
-      if (gmRes.statusCode >= 200 && gmRes.statusCode < 300) {
-        final gmData = jsonDecode(gmRes.body);
-        if (gmData is Map &&
-            gmData['email_addr'] != null &&
-            gmData['sid_token'] != null) {
-          final email = gmData['email_addr'].toString();
-          onLog?.call('Created GuerrillaMail inbox: $email');
-          return TempMailInbox(
-            provider: 'guerrilla',
-            email: email,
-            mailToken: gmData['sid_token'].toString(),
-          );
-        }
-      }
-    } catch (e) {
-      onLog?.call('GuerrillaMail failed ($e)');
-    }
+    final gLast = await tryGuerrilla();
+    if (gLast != null) return gLast;
 
     throw Exception('All temp-mail providers failed to create an inbox.');
   }
@@ -235,7 +247,7 @@ class TempMailClient {
               'Authorization': 'Bearer ${inbox.mailToken}',
               'Accept': 'application/json',
             },
-          ).timeout(const Duration(seconds: 15));
+          ).timeout(const Duration(seconds: 8));
           if (res.statusCode >= 200 && res.statusCode < 300) {
             final data = jsonDecode(res.body);
             final msgs = data is List
@@ -259,7 +271,7 @@ class TempMailClient {
                   'Authorization': 'Bearer ${inbox.mailToken}',
                   'Accept': 'application/json',
                 },
-              ).timeout(const Duration(seconds: 15));
+              ).timeout(const Duration(seconds: 8));
               if (detailRes.statusCode >= 200 && detailRes.statusCode < 300) {
                 final detail = jsonDecode(detailRes.body);
                 if (detail is Map) {
@@ -282,7 +294,7 @@ class TempMailClient {
           final res = await _http
               .get(Uri.parse(
                   'https://api.guerrillamail.com/ajax.php?f=get_email_list&offset=0&sid_token=${Uri.encodeComponent(inbox.mailToken)}'))
-              .timeout(const Duration(seconds: 15));
+              .timeout(const Duration(seconds: 8));
           if (res.statusCode >= 200 && res.statusCode < 300) {
             final data = jsonDecode(res.body);
             final list = data is Map ? (data['list'] as List? ?? []) : const [];
@@ -304,7 +316,7 @@ class TempMailClient {
               final detailRes = await _http
                   .get(Uri.parse(
                       'https://api.guerrillamail.com/ajax.php?f=fetch_email&email_id=$mailId&sid_token=${Uri.encodeComponent(inbox.mailToken)}'))
-                  .timeout(const Duration(seconds: 15));
+                  .timeout(const Duration(seconds: 8));
               if (detailRes.statusCode >= 200 && detailRes.statusCode < 300) {
                 final detail = jsonDecode(detailRes.body);
                 if (detail is Map) {
