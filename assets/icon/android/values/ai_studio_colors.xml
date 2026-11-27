@@ -1,7 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <!-- Dark tile behind the yellow MH mark: yellow on the launcher's
-         default white background was unreadable (his screenshot,
-         2026-11-27), so the icon carries its own dark background. -->
-    <color name="ai_studio_ic_background">#121216</color>
-</resources>
